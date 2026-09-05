@@ -229,7 +229,44 @@ def _gemini_transcribe_clip(path: Path, key: str, offset_seconds: float = 0.0) -
 
     if not words:
         raise RuntimeError("Gemini 沒有回傳詞級時間戳")
-    return words
+    return _clean_gemini_words(words)
+
+
+# Gemini 的時間戳有兩種固有噪音，兩者都不是轉錄錯誤，
+# 但不處理的話每一集都會被 verify 判定失敗，等於這條路白開。
+MAX_WORD_SECONDS = 5.0
+
+
+def _clean_gemini_words(words: list[Word]) -> list[Word]:
+    """把 Gemini 時間戳的噪音整理掉。
+
+    兩種固有現象：
+    - 有些詞被標成十幾秒長，實際上是把後面那段停頓算進了詞長
+      （實測看過一個「は」佔 10.5 秒）
+    - 有些詞是零長度（end == start），10 分鐘裡約 35 個
+
+    這些不影響內容，只影響時間軸的合理性檢查，所以在這裡收斂：
+    詞長超過上限就截到下一個詞的開頭，零長度就給一個最小值。
+    """
+    cleaned: list[Word] = []
+    for index, word in enumerate(words):
+        start = word.start
+        end = word.end
+
+        next_start = words[index + 1].start if index + 1 < len(words) else None
+
+        if end <= start:
+            # 零長度：撐到下一個詞開始之前，最多 0.3 秒
+            end = min(start + 0.3, next_start) if next_start else start + 0.3
+            end = max(end, start + 0.05)
+        elif end - start > MAX_WORD_SECONDS:
+            # 過長：多出來的是停頓不是發音，截掉
+            limit = start + MAX_WORD_SECONDS
+            end = min(limit, next_start) if next_start else limit
+            end = max(end, start + 0.05)
+
+        cleaned.append(Word(text=word.text, start=start, end=end, speaker=word.speaker))
+    return cleaned
 
 
 def transcribe_gemini(audio_url: str, language: str) -> list[Word]:
@@ -273,12 +310,26 @@ def transcribe_gemini(audio_url: str, language: str) -> list[Word]:
 
         words: list[Word] = []
         offset = 0.0
+        cursor = 0
         for index, part in enumerate(parts):
             size_mb = part.stat().st_size / 1048576
             log(f"Gemini 轉錄第 {index+1}/{len(parts)} 段（{size_mb:.1f} MB）")
             # 時間軸用實際長度累加，用固定值推算會愈後面愈歪
             duration = _probe_duration(part)
-            words.extend(_gemini_transcribe_clip(part, keys[index % len(keys)], offset))
+
+            # 免費層的配額是會回填的水桶：打完一發就欠著，
+            # 幾秒到幾十秒後才恢復。撞到就換下一把金鑰，
+            # 手上有幾把就等於同時有幾個水桶。
+            for attempt in range(len(keys)):
+                key = keys[(cursor + attempt) % len(keys)]
+                try:
+                    words.extend(_gemini_transcribe_clip(part, key, offset))
+                    cursor = (cursor + attempt + 1) % len(keys)
+                    break
+                except urllib.error.HTTPError as exc:
+                    if exc.code == 429 and attempt < len(keys) - 1:
+                        continue
+                    raise
             offset += duration
 
     log(f"Gemini 完成，{len(words)} 個詞")

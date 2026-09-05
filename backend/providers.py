@@ -173,15 +173,28 @@ def _gemini_transcribe_clip(path: Path, key: str, offset_seconds: float = 0.0) -
             "data": base64.b64encode(path.read_bytes()).decode(),
             "mime_type": "audio/mp3",
         }],
-        "generation_config": {"transcription_config": {"mode": {
-            # verbatim 是保留口語填充詞的關鍵。實測同一集：
-            # 這個模式下填充詞 60 個，Deepgram 只有 2 個、Whisper 3 個。
-            "type": "verbatim",
-            "timestamp_granularities": ["word"],
-            # 講者資訊只掛在 word annotation 上，
-            # 所以單獨開 diarization 會拿到空的，必須跟時間戳一起開。
-            "diarization_mode": "speaker",
-        }}},
+        "generation_config": {"transcription_config": {
+            "mode": {
+                # verbatim 是保留口語填充詞的關鍵。實測同一集：
+                # 這個模式下填充詞 60 個，Deepgram 只有 2 個、Whisper 3 個。
+                "type": "verbatim",
+                "timestamp_granularities": ["word"],
+                # 講者資訊只掛在 word annotation 上，
+                # 所以單獨開 diarization 會拿到空的，必須跟時間戳一起開。
+                "diarization_mode": "speaker",
+            },
+            # 一定要顯式列出所有可能出現的語言，這是硬性條件。
+            #
+            # Gemini 沒有「多語言模式」這種開關：不指定語言的行為
+            # 跟指定單一語言完全相同（實測都是 37.9% 空白），
+            # 自動偵測只會挑一個主導語言，其餘整段靜默丟棄。
+            #
+            # 而且它的失敗比 Deepgram 更難察覺 —— Deepgram 會把英文
+            # 硬拼成假名（垃圾但看得出來），Gemini 是直接沒有那些詞，
+            # 但因為日文段落跨在前後，涵蓋率仍然顯示 99.8%。
+            # 光看 coverage 這個失敗是隱形的，一定要靠 verify 的空白比例才抓得到。
+            "language_codes": ["ja-JP", "en-US"],
+        }},
     }
 
     response = _post(

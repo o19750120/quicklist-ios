@@ -68,6 +68,11 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
     log(f"斷句完成：{summary['count']} 句，平均 {summary['avg_seconds']} 秒、"
         f"{summary['avg_chars']} 字，最長 {summary['max_seconds']} 秒")
 
+    # 語音辨識在沒有語音的地方會編造內容，最常見的形式是同一句重複很多次。
+    # 那種東西寫進逐字稿後看起來像資料不像錯誤，所以主動找出來。
+    for issue in verify.detect_hallucination(lines):
+        log(f"疑似幻覺：{issue}")
+
     rows = [line.as_row() for line in lines]
 
     stage(f"翻譯 {len(rows)} 句")

@@ -24,8 +24,14 @@ from segment import Word
 TAIL_TOLERANCE_SECONDS = 45.0
 # 但短太多就不正常了，比例與絕對值同時看
 MIN_COVERAGE_RATIO = 0.90
-# 中間的空白超過這麼久就可疑
+# 超過這麼久的空白就記錄下來，但單獨一段不代表有問題 ——
+# 節目中間本來就有音樂與停頓。
 GAP_THRESHOLD_SECONDS = 30.0
+# 真正的判定看兩件事：空白總共佔多少，或有沒有單一一段長到不合理。
+# 這組數字是實測校準的：雙語節目漏掉英文段落時空白佔 35.8%（要抓），
+# 正常節目的音樂間隔佔 4%（要放行）。
+MAX_GAP_RATIO = 0.15
+MAX_SINGLE_GAP_SECONDS = 150.0
 
 
 @dataclass
@@ -93,15 +99,62 @@ def check(words: list[Word], audio_seconds: float) -> Report:
 
     if report.gaps:
         worst = max(report.gaps, key=lambda g: g[1] - g[0])
-        report.problems.append(
-            f"中間有 {len(report.gaps)} 段空白，最長的在 "
-            f"{worst[0]/60:.1f}–{worst[1]/60:.1f} 分（{(worst[1]-worst[0])/60:.1f} 分鐘）")
+        worst_length = worst[1] - worst[0]
+        total_gap = sum(b - a for a, b in report.gaps)
+        gap_ratio = total_gap / audio_seconds if audio_seconds > 0 else 0.0
+
+        if gap_ratio > MAX_GAP_RATIO or worst_length > MAX_SINGLE_GAP_SECONDS:
+            report.problems.append(
+                f"中間有 {len(report.gaps)} 段空白共 {total_gap/60:.1f} 分鐘"
+                f"（佔 {gap_ratio*100:.0f}%），最長的在 "
+                f"{worst[0]/60:.1f}–{worst[1]/60:.1f} 分")
 
     # 開頭太晚也值得注意，可能前面一段被吃掉
     if ordered[0].start > GAP_THRESHOLD_SECONDS:
         report.problems.append(f"開頭 {ordered[0].start/60:.1f} 分鐘沒有內容")
 
     return report
+
+
+def detect_hallucination(lines: list) -> list[str]:
+    """找出幻覺的典型徵狀。
+
+    語音辨識在沒有語音的地方（音樂、長靜默、雜訊）不會安靜地跳過，
+    而是會編造內容 —— 最常見的形式就是把同一句話重複很多次。
+    這種東西寫進逐字稿後看起來像正常資料，不像錯誤，所以要主動找出來。
+
+    傳入的是 segment.Line 清單。
+    """
+    problems: list[str] = []
+    if len(lines) < 3:
+        return problems
+
+    # 連續重複同一句
+    longest_run, run_text, current = 1, "", 1
+    for previous, line in zip(lines, lines[1:]):
+        if line.text.strip() == previous.text.strip() and len(line.text.strip()) > 1:
+            current += 1
+            if current > longest_run:
+                longest_run, run_text = current, line.text.strip()
+        else:
+            current = 1
+
+    if longest_run >= 4:
+        problems.append(f"同一句連續重複 {longest_run} 次：「{run_text[:24]}」")
+
+    # 整份裡某一句出現的比例過高
+    counts: dict[str, int] = {}
+    for line in lines:
+        key = line.text.strip()
+        if len(key) > 3:
+            counts[key] = counts.get(key, 0) + 1
+    if counts:
+        text, count = max(counts.items(), key=lambda kv: kv[1])
+        if count >= 8 and count / len(lines) > 0.03:
+            problems.append(
+                f"「{text[:24]}」出現 {count} 次，佔全部 {count/len(lines)*100:.0f}%")
+
+    return problems
 
 
 def as_dict(report: Report) -> dict:

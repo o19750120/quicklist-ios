@@ -59,22 +59,37 @@ Windows 上沒有 Swift 編譯器，真正的編譯錯誤只有雲端看得到�
 `python scripts/check.py` 會在 push 前先驗 YAML / plist / 資源檔 / Swift 括號平衡，
 擋掉大部分低級錯誤，不用浪費一輪 3 分鐘的雲端建置。
 
-## iPad 端首次設定（只需做一次）
+## 第一次設定（只需做一次）
 
-細節以官方文件為準：<https://docs.sidestore.io>
+官方文件：<https://docs.sidestore.io/docs/installation/install>
+（注意：網路上大量教學仍在教 AltServer + jitterbugpair，那套官方已標為過時；
+StosVPN 也已從 App Store 下架，現在用 LocalDevVPN。）
 
-1. **安裝 SideStore 本體**
-   Windows 裝 Apple 官網版 iTunes + iCloud（不要 Microsoft Store 版），
-   用 AltServer / SideServer 把 `SideStore.ipa` 側載進 iPad。
-2. **產生配對檔（pairing file）**
-   用 SideStore 提供的 `jitterbugpair.exe` 產生 `.mobiledevicepairing`，傳進 iPad 匯入 SideStore。
-3. **開啟 loopback VPN**
-   App Store 安裝 **StosVPN**（官方現在推薦，取代早期的 WireGuard 設定檔），打開它。
-   有這個 App 在，SideStore 才能在 iPad 上自己重新簽名，不用接電腦。
-4. **在 SideStore 登入 Apple ID**
-   建議另開一個免費 Apple ID 專用，不要用主帳號。
+### 電腦端
 
-設定完成後，就是「Safari 下載 ipa → SideStore 開啟 → 裝好」這麼簡單。
+1. **Apple 官網版 iTunes**（不要 Microsoft Store 版）
+   `winget install --id Apple.iTunes -e`
+   真正的目的是那組 USB 驅動；iTunes 本身不會用到。
+   驗證裝好沒：`Get-Service | Where-Object Name -match 'Apple'`，
+   要看到 `Apple Mobile Device Service`，沒有的話 iloader 會認不到 iPad。
+2. **iloader**：`winget install --id nabdev.iloader -e`
+   官方來源只有 <https://github.com/nab138/iloader>。它會自己處理配對檔。
+3. iPad 用 USB 接電腦，iPad 上點「信任」並輸入密碼。
+4. 開 iloader → 登入 Apple 帳號（**大小寫有差**）→ 選你的 iPad → 按 **Install SideStore (Stable)**。
+
+### iPad 端
+
+5. App Store 安裝 **LocalDevVPN**，打開按 Connect。
+   要安裝、更新、續簽 SideStore 裡的 App 時，這個都必須是連線狀態。
+6. 設定 → 一般 → VPN 與裝置管理 → 「開發者 App」下點你的 Apple 帳號 → 信任。
+   （iPadOS 18 / 26 選「允許並重新啟動」並輸入密碼）
+7. 設定 → 隱私權與安全性 → 開啟「開發者模式」（會重開機）。
+8. 打開 SideStore，用**同一個** Apple 帳號登入。
+9. My Apps → 點 SideStore 旁的「7 DAYS」計數器手動刷新一次，設定完成。
+
+建議另開一個免費 Apple ID 專用，不要用主帳號。
+
+設定完成後就是全無線：Safari 下載 `.ipa` → 用 SideStore 開啟 → 裝好。
 
 ## 免費 Apple ID 的限制（不是本專案造成的，是 Apple 的規則）
 
@@ -90,8 +105,8 @@ Windows 上沒有 Swift 編譯器，真正的編譯錯誤只有雲端看得到�
 **建置失敗？** GitHub → Actions → 點紅色那次 → 展開 `Build (no code signing)` 看錯誤訊息。
 Swift 編譯錯誤都會出現在這裡。
 
-**iPad 裝不起來？** 先確認 SideStore 能不能自己重新簽名既有 App；
-不行的話通常是 StosVPN 沒開，或配對檔過期需要重新產生。
+**iPad 裝不起來？** 九成是 LocalDevVPN 沒連線。先確認它是連線狀態，
+再看 SideStore 能不能自己重新簽名既有 App。都不行的話用 iloader 重跑一次安裝。
 
 **建置時間額度**：macOS runner 在 private repo 會用掉 10 倍分鐘數。
 這個 repo 設為 public，建置分鐘數不計費。

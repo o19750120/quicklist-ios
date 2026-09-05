@@ -1,0 +1,143 @@
+name: Transcribe episode
+
+# 轉錄不需要 macOS，用 Ubuntu 快得多，而且 runner 內建 ffmpeg。
+on:
+  workflow_dispatch:
+    inputs:
+      show:
+        description: "節目名稱（Spotify 上顯示的）"
+        required: false
+      episode:
+        description: "集數標題"
+        required: false
+      spotify_id:
+        description: "Spotify episode id（可留空）"
+        required: false
+      language:
+        description: "音檔語言代碼，例如 ja / en / ko"
+        required: false
+        default: "ja"
+      dry_run:
+        description: "只測試找不找得到音檔，不實際轉錄"
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [transcribe]
+  schedule:
+    # 定期撿沒人處理的排隊任務
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: transcribe
+  cancel-in-progress: false
+
+jobs:
+  transcribe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 確認工具鏈
+        run: |
+          python --version
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
+      - name: 手動指定的單集
+        if: github.event_name == 'workflow_dispatch' && inputs.show != ''
+        run: |
+          ARGS=(--show "${{ inputs.show }}" --episode "${{ inputs.episode }}" --language "${{ inputs.language }}")
+          if [ -n "${{ inputs.spotify_id }}" ]; then
+            ARGS+=(--spotify-id "${{ inputs.spotify_id }}")
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          python backend/transcribe.py "${ARGS[@]}"
+
+      - name: 外部觸發的單集
+        if: github.event_name == 'repository_dispatch'
+        run: |
+          python backend/transcribe.py \
+            --job "${{ github.event.client_payload.job_id }}"
+
+      - name: 撿排隊中的任務
+        if: github.event_name == 'schedule'
+        run: |
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "沒有設定 Supabase，跳過"
+            exit 0
+          fi
+          python - <<'PYTHON'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "backend")
+          from supabase_client import Supabase
+
+          supabase = Supabase()
+          jobs = supabase.select(
+              "kikitori_jobs",
+              "status=eq.queued&order=created_at.asc&limit=3",
+          )
+
+          if not jobs:
+              print("沒有排隊中的任務")
+              sys.exit(0)
+
+          print(f"撿到 {len(jobs)} 個任務")
+          failed = 0
+          for job in jobs:
+              print(f"--- 處理 {job['id']}：{job['show_name']} / {job['episode_title']}")
+              result = subprocess.run(
+                  [sys.executable, "backend/transcribe.py", "--job", job["id"]]
+              )
+              if result.returncode != 0:
+                  failed += 1
+
+          sys.exit(1 if failed == len(jobs) else 0)
+          PYTHON
+
+      - name: 通知 Discord
+        if: always() && github.event_name != 'schedule'
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          STATUS: ${{ job.status }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "沒有 webhook，跳過通知"
+            exit 0
+          fi
+          if [ "$STATUS" = "success" ]; then
+            TITLE="✅ 逐字稿處理完成"
+            COLOR=3066993
+          else
+            TITLE="❌ 逐字稿處理失敗"
+            COLOR=15158332
+          fi
+          DESC="節目：${{ inputs.show }}
+          集數：${{ inputs.episode }}
+          記錄：$RUN_URL"
+          jq -n --arg t "$TITLE" --arg d "$DESC" --argjson c "$COLOR" \
+            '{username:"Kikitori", embeds:[{title:$t, description:$d, color:$c}]}' > discord.json
+          curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: Mozilla/5.0 (compatible; KikitoriCI/1.0)" \
+            --data @discord.json "$WEBHOOK" \
+            && echo "已通知" || echo "通知失敗（不影響結果）"

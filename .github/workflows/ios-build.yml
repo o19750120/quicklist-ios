@@ -3,8 +3,12 @@ name: Build unsigned IPA
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "**.md"
+    # 只有真正影響 App 的東西才重建，後端與文件改動不佔用 macOS runner 額度
+    paths:
+      - "Sources/**"
+      - "Resources/**"
+      - "project.yml"
+      - ".github/workflows/ios-build.yml"
   workflow_dispatch:
 
 permissions:

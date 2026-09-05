@@ -93,8 +93,6 @@
 - [ ] 打開 App 時自動喚起 Spotify（靈動歌詞那個體驗）
 - [ ] 沒網路、Spotify 沒在播、逐字稿還沒好等狀態的畫面
 - [ ] 減少匯入次數：能遠端更新的東西（逐字稿、字典）都走後端，不綁進 App
-- [ ] 排隊到開工要等最多 5 分鐘（GitHub schedule 最短間隔）。
-      之後改用 Supabase Database Webhook 直接觸發 repository_dispatch 就能即時
 - [ ] 斷句還有零星瑕疵（Deepgram 把「日本語」拆成「日」「本語」時會跟著切錯），
       之後可讓 Gemini 依語意重新分句
 

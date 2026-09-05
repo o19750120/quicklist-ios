@@ -1,0 +1,89 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Release
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    env:
+      APP_NAME: QuickList
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          ls /Applications | grep -i '^Xcode' || true
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build (no code signing)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "${APP_NAME}.xcodeproj" \
+            -scheme "${APP_NAME}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build
+
+      - name: Package into .ipa
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/${APP_NAME}.app"
+          test -d "$APP_PATH" || { echo "找不到 .app: $APP_PATH"; ls -R build/Build/Products; exit 1; }
+          rm -rf payload_stage
+          mkdir -p payload_stage/Payload
+          cp -R "$APP_PATH" payload_stage/Payload/
+          # SideStore 不需要簽名檔，先清乾淨避免安裝時衝突
+          rm -rf "payload_stage/Payload/${APP_NAME}.app/_CodeSignature"
+          (cd payload_stage && zip -qry "../${APP_NAME}.ipa" Payload)
+          ls -lh "${APP_NAME}.ipa"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-ipa
+          path: ${{ env.APP_NAME }}.ipa
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.0.${{ github.run_number }}"
+          gh release create "$TAG" "${APP_NAME}.ipa" \
+            --title "${APP_NAME} $TAG" \
+            --notes "自動建置（未簽名 IPA）
+
+commit: ${{ github.sha }}
+
+在 iPad 用 Safari 下載下面的 .ipa，選「用 SideStore 開啟」即可安裝。"

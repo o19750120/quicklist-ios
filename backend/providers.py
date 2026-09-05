@@ -272,35 +272,42 @@ def _list_models(provider: str, key: str) -> set[str]:
     return {m["id"] for m in payload.get("data", [])}
 
 
-def pick_model(provider: str, keys: list[str]) -> str | None:
-    """從偏好清單挑第一個服務商現在真的還有的模型。
+def available_models(provider: str, keys: list[str]) -> list[str]:
+    """這個服務商目前真的還有的模型，依偏好順序排。
 
-    每個行程只問一次就記住。問不到（金鑰全失效之類）就回 None，
-    讓呼叫端明確知道這條路不通，而不是拿一個不存在的模型去撞 404。
+    每個行程只問一次就記住。回空清單代表這條路不通，
+    讓呼叫端明確知道，而不是拿不存在的模型名稱去撞 404。
     """
     if provider in _model_cache:
         return _model_cache[provider]
 
     preference = GEMINI_MODEL_PREFERENCE if provider == "gemini" else GROQ_MODEL_PREFERENCE
-    chosen = None
+    ordered: list[str] = []
 
     for key in keys:
         try:
-            available = _list_models(provider, key)
+            existing = _list_models(provider, key)
         except Exception:
             continue
-        chosen = next((m for m in preference if m in available), None)
-        if chosen is None and available:
-            # 偏好清單全落空，至少挑一個看起來是對話模型的，別直接放棄
-            fallback = sorted(m for m in available
-                              if not any(x in m for x in ("whisper", "tts", "embed", "guard")))
-            chosen = fallback[0] if fallback else None
-        if chosen:
-            log(f"{provider} 使用模型 {chosen}")
+
+        ordered = [m for m in preference if m in existing]
+        if not ordered and existing:
+            # 偏好清單全落空，至少留下看起來能對話的，別直接放棄
+            ordered = sorted(m for m in existing
+                             if not any(x in m for x in ("whisper", "tts", "embed", "guard",
+                                                         "transcribe", "image", "veo", "imagen")))
+        if ordered:
+            log(f"{provider} 可用模型：{', '.join(ordered[:3])}"
+                + (f"（共 {len(ordered)} 個）" if len(ordered) > 3 else ""))
             break
 
-    _model_cache[provider] = chosen
-    return chosen
+    _model_cache[provider] = ordered
+    return ordered
+
+
+def pick_model(provider: str, keys: list[str]) -> str | None:
+    models = available_models(provider, keys)
+    return models[0] if models else None
 
 
 def _gemini_batch(prompt: str, key: str, model: str) -> str:
@@ -308,10 +315,17 @@ def _gemini_batch(prompt: str, key: str, model: str) -> str:
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
         json.dumps({
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.2,
+                # 翻譯不需要推理。實測 gemini-3.8-flash 預設會花 387 tokens 思考
+                # 才產出 36 tokens 的答案 —— 九成額度燒在沒用的地方，速度也慢一倍。
+                # 注意 Gemini 3 系列不吃 thinkingLevel: MINIMAL，thinkingBudget 才有效。
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
         }).encode(),
         {"Content-Type": "application/json"},
-        timeout=300,
+        timeout=600,
     )
     return payload["candidates"][0]["content"]["parts"][0]["text"]
 
@@ -324,9 +338,11 @@ def _groq_batch(prompt: str, key: str, model: str) -> str:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
+            # 同理。Groq 只接受 low / medium / high，沒有完全關閉的選項。
+            "reasoning_effort": "low",
         }).encode(),
         {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        timeout=300,
+        timeout=600,
     )
     return payload["choices"][0]["message"]["content"]
 
@@ -356,69 +372,74 @@ def translation_health() -> tuple[bool, str]:
     return False, "沒有任何翻譯服務可用"
 
 
-def translate(lines: list[str], target: str = "繁體中文") -> list[str]:
-    """分批翻譯。撞到配額就換下一把金鑰，整批都失敗才留空。"""
-    gemini_keys = _keys("GEMINI_API_KEYS")
-    groq_keys = _keys("GROQ_API_KEYS")
+def _translate_once(lines: list[str], target: str) -> tuple[list[str] | None, list[str]]:
+    """把一份句子送出去翻譯，回傳（結果, 失敗原因清單）。
 
-    if not gemini_keys and not groq_keys:
-        log("沒有翻譯用的金鑰，跳過翻譯")
-        return ["" for _ in lines]
+    金鑰的用法是「一把用到不能用為止」：同一把金鑰會把它所有可用的模型
+    都試過一輪，全部撞牆才換下一把。這樣額度是一把一把耗盡，
+    而不是每把都只用掉一點點。同一時間只會有一個請求在跑，不並行。
+    """
+    prompt = _translate_prompt(lines, target)
+    failures: list[str] = []
 
-    gemini_model = pick_model("gemini", gemini_keys) if gemini_keys else None
-    groq_model = pick_model("groq", groq_keys) if groq_keys else None
-
-    output: list[str] = []
-    gemini_cursor = 0
-
-    for start in range(0, len(lines), TRANSLATE_BATCH):
-        batch = lines[start:start + TRANSLATE_BATCH]
-        prompt = _translate_prompt(batch, target)
-        log(f"翻譯 {start + 1}–{start + len(batch)} / {len(lines)}")
-
-        raw = None
-        # 失敗原因一定要留下來。之前這裡把例外整個吞掉，
-        # 結果 Groq 下架模型後翻譯全斷，卻沒有任何人知道。
-        failures: list[str] = []
-
-        if gemini_model:
-            for attempt in range(len(gemini_keys)):
-                key = gemini_keys[(gemini_cursor + attempt) % len(gemini_keys)]
-                try:
-                    raw = _gemini_batch(prompt, key, gemini_model)
-                    gemini_cursor = (gemini_cursor + attempt) % len(gemini_keys)
-                    break
-                except urllib.error.HTTPError as exc:
-                    failures.append(f"gemini#{attempt + 1} HTTP {exc.code}")
-                except Exception as exc:
-                    failures.append(f"gemini#{attempt + 1} {type(exc).__name__}")
-        else:
-            failures.append("gemini 沒有可用模型")
-
-        if raw is None and groq_model:
-            for index, key in enumerate(groq_keys, 1):
-                try:
-                    raw = _groq_batch(prompt, key, groq_model)
-                    break
-                except urllib.error.HTTPError as exc:
-                    failures.append(f"groq#{index} HTTP {exc.code}")
-                except Exception as exc:
-                    failures.append(f"groq#{index} {type(exc).__name__}")
-        elif raw is None:
-            failures.append("groq 沒有可用模型")
-
-        if raw is None:
-            # 只印前幾個，同一種錯誤重複幾十次沒有意義
-            unique = list(dict.fromkeys(failures))[:4]
-            log(f"這批翻譯全部失敗（{'；'.join(unique)}），留空")
-            output.extend("" for _ in batch)
+    for provider, env_name, caller in (
+        ("gemini", "GEMINI_API_KEYS", _gemini_batch),
+        ("groq", "GROQ_API_KEYS", _groq_batch),
+    ):
+        keys = _keys(env_name)
+        if not keys:
             continue
 
-        try:
-            parsed = json.loads(raw)
-            output.extend(str(parsed.get(str(i), "")) for i in range(len(batch)))
-        except json.JSONDecodeError:
-            log("翻譯回應不是合法 JSON，這批留空")
+        models = available_models(provider, keys)
+        if not models:
+            failures.append(f"{provider} 沒有可用模型")
+            continue
+
+        for index, key in enumerate(keys, 1):
+            for model in models:
+                try:
+                    parsed = json.loads(caller(prompt, key, model))
+                    result = [str(parsed.get(str(i), "")) for i in range(len(lines))]
+                    if any(result):
+                        return result, failures
+                    failures.append(f"{provider}#{index}/{model} 回應是空的")
+                except urllib.error.HTTPError as exc:
+                    failures.append(f"{provider}#{index}/{model} HTTP {exc.code}")
+                except json.JSONDecodeError:
+                    failures.append(f"{provider}#{index}/{model} 回應不是 JSON")
+                except Exception as exc:
+                    failures.append(f"{provider}#{index}/{model} {type(exc).__name__}")
+
+    return None, failures
+
+
+def translate(lines: list[str], target: str = "繁體中文") -> list[str]:
+    """翻譯整份逐字稿。
+
+    預設一次送完。一集約 4000 tokens，而模型的輸入上限是百萬級、
+    輸出上限六萬多，分批只是多打幾次 API，沒有任何好處。
+    整份失敗才退回分批 —— 那時候分批的價值是「至少救回一部分」。
+    """
+    if not lines:
+        return []
+
+    log(f"翻譯 {len(lines)} 句（整份一次送）")
+    result, failures = _translate_once(lines, target)
+    if result:
+        return result
+
+    unique = list(dict.fromkeys(failures))[:5]
+    log(f"整份翻譯失敗（{'；'.join(unique)}），改成分批重試")
+
+    output: list[str] = []
+    for start in range(0, len(lines), TRANSLATE_BATCH):
+        batch = lines[start:start + TRANSLATE_BATCH]
+        log(f"  重試 {start + 1}–{start + len(batch)} / {len(lines)}")
+        part, part_failures = _translate_once(batch, target)
+        if part:
+            output.extend(part)
+        else:
             output.extend("" for _ in batch)
+            log(f"  這批仍然失敗（{'；'.join(list(dict.fromkeys(part_failures))[:2])}）")
 
     return output

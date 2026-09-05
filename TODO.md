@@ -26,33 +26,33 @@
 - [x] 每 5 秒對一次 API、每 0.2 秒本地推算進度，畫面秒數平順前進
 - [x] 登入、正在播什麼、設定三個畫面
 - [ ] **實機驗證 OAuth 能不能跳回 App** ← 這是地基，沒過的話後面全部要改
-- [ ] 診斷畫面：顯示 token 狀態、最近幾次 API 回應、錯誤堆疊
+- [x] 診斷畫面：token 狀態、播放狀態、任務狀態、App 內執行紀錄（可一鍵複製）
       （讓一次匯入能回報最多資訊，減少來回次數）
 
-## 階段 2：逐字稿產生管線（後端）
+## 階段 2：逐字稿產生管線（後端）— 程式完成，等 Groq key 實測
 
-- [ ] 用 iTunes Search API 從「節目名」找到公開 RSS
-- [ ] 從 RSS 比對出「集數名」對應的那一集，拿到音檔網址
+- [x] 用 iTunes Search API 從「節目名」找到公開 RSS
+- [x] 從 RSS 比對出「集數名」對應的那一集，拿到音檔網址（四個真實日文節目全部命中）
       （名稱不會完全一樣，需要模糊比對；先在 Windows 本機用真實日文節目驗證）
-- [ ] Supabase 建表（用 `kikitori_` 前綴，放在 trendrace 專案，不動既有的 `daily`）
+- [x] Supabase 建表（`kikitori_` 前綴，放在 trendrace，未動既有的 `daily`）
       - `kikitori_episodes`：節目名、集名、Spotify episode id、RSS 音檔網址、時長
       - `kikitori_transcripts`：逐句時間軸、原文、翻譯
       - `kikitori_jobs`：轉錄任務狀態
-- [ ] GitHub Actions 轉錄工作流
-      - [ ] 下載音檔
-      - [ ] ffmpeg 壓成 16kHz 單聲道（Groq 免費版單檔上限 25MB，不壓縮送不進去）
-      - [ ] Groq Whisper 轉錄，取得逐句時間軸
-      - [ ] 翻譯成中文
-      - [ ] 寫回 Supabase
-- [ ] **需要你提供：Groq API key**（https://console.groq.com → API Keys）
+- [x] GitHub Actions 轉錄工作流（Ubuntu runner）
+      - [x] 下載音檔
+      - [x] ffmpeg 壓成 16kHz 單聲道並依實際長度切段
+      - [x] Groq Whisper 轉錄，逐段累加時間軸偏移
+      - [x] 分批翻譯，強制輸出等長陣列確保逐句對齊
+      - [x] 寫回 Supabase
+- [ ] **需要你提供：Groq API key**（https://console.groq.com → API Keys）← 目前卡在這裡
 
-## 階段 3：App 端逐字稿
+## 階段 3：App 端逐字稿 — 程式完成，待實機驗證
 
-- [ ] 從 Supabase 讀逐字稿
-- [ ] 逐句顯示，目前這句高亮，畫面自動捲動跟上
-- [ ] 中日對照：原文下方顯示翻譯，可切換只看原文
-- [ ] **點某句「現在講的是這句」重新對齊** ← 解決 Spotify 動態廣告造成的時間偏移
-- [ ] 這一集還沒有逐字稿時，顯示「產生逐字稿」按鈕與進度
+- [x] 從 Supabase 讀逐字稿（anon key，查詢格式已用測試資料驗證通過）
+- [x] 逐句顯示，目前這句高亮，自動捲動（手動捲動時暫停跟隨 6 秒）
+- [x] 中日對照，工具列可切換
+- [x] **長按某句「現在講的是這句」重新對齊**，單擊則跳到該句（Spotify seek）
+- [x] 沒有逐字稿時顯示「產生逐字稿」，排隊中每 20 秒自動查一次，好了自動出現
 
 ## 階段 4：語言學習功能
 

@@ -61,8 +61,13 @@ def _request(method: str, path: str, body: dict | None = None):
         },
         data=json.dumps(body).encode() if body else None,
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        raw = response.read()
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as exc:
+        # 預設的 HTTPError 只給狀態碼，把伺服器實際說的話帶出來才好除錯
+        detail = exc.read().decode("utf-8", "replace")
+        raise RuntimeError(f"Supabase API {exc.code}: {detail[:500]}") from None
     return json.loads(raw) if raw else None
 
 

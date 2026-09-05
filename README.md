@@ -18,24 +18,46 @@ Windows (寫程式)  →  git push  →  GitHub Actions (macOS runner 編譯)
 | `project.yml` | XcodeGen 設定檔，取代手動維護的 `.xcodeproj` |
 | `Sources/` | SwiftUI 程式碼 |
 | `Resources/` | `Info.plist`、App 圖示、色票 |
-| `.github/workflows/ios-build.yml` | 自動編譯 + 打包 `.ipa` + 發佈 Release |
+| `.github/workflows/ios-build.yml` | 自動編譯 + 打包 `.ipa` + 發佈 Release + Discord 通知 |
+| `scripts/check.py` | push 前的本機檢查 |
+| `scripts/ship.ps1` | 一鍵：檢查 → commit → push → 等建置 → 給下載連結 |
 
 `.xcodeproj` 不進版控，每次在雲端由 `xcodegen` 重新產生 —— 這正是不需要 Mac 的關鍵。
 
 ## 日常開發流程
 
-```bash
-# 1. 改程式（Sources/ 底下的 .swift）
-# 2. 送上去
-git add -A
-git commit -m "改了什麼"
-git push
+改完 `Sources/` 底下的 `.swift`，在 PowerShell 執行：
+
+```powershell
+./scripts/ship.ps1 "改了什麼"
 ```
 
-push 完約 3～6 分鐘，到 repo 的 **Releases** 頁面會出現新版 `.ipa`。
+這個腳本會依序做：本機檢查 → commit → push → 等雲端建置 → 印出 iPad 的下載連結。
+
+想手動一步步來也可以：
+
+```bash
+python scripts/check.py     # 先在 Windows 上抓得到的錯誤先抓出來
+git add -A && git commit -m "改了什麼" && git push
+```
+
+push 完約 3～6 分鐘，repo 的 **Releases** 頁面會出現新版 `.ipa`。
 在 iPad 用 Safari 打開該頁面 → 下載 `.ipa` → 選「用 SideStore 開啟」→ 裝好。
 
 想手動觸發建置：GitHub repo → Actions → Build unsigned IPA → Run workflow。
+
+## 出問題的時候怎麼看
+
+Windows 上沒有 Swift 編譯器，真正的編譯錯誤只有雲端看得到。所以錯誤訊息有三個出口：
+
+1. **Discord**：每次建置結束都會推播。成功給下載連結，失敗給 `error:` 摘要 + 記錄連結。
+   （webhook 存在 GitHub Secret `DISCORD_WEBHOOK`，沒有寫進這個公開 repo。）
+2. **GitHub Actions 頁面**：Actions → 點那次建置。每個階段都有摺疊分組，
+   失敗時「抽出編譯錯誤摘要」那步會直接把 `error:` 行列出來。
+3. **build.log**：完整編譯輸出當成 artifact 上傳，保留 30 天，可以整包下載回來看。
+
+`python scripts/check.py` 會在 push 前先驗 YAML / plist / 資源檔 / Swift 括號平衡，
+擋掉大部分低級錯誤，不用浪費一輪 3 分鐘的雲端建置。
 
 ## iPad 端首次設定（只需做一次）
 

@@ -71,6 +71,7 @@ struct LibraryView: View {
                                     row(entry)
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityIdentifier("library.row")
                             }
                         }
                     }

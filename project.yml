@@ -36,3 +36,26 @@ targets:
         CODE_SIGNING_ALLOWED: NO
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         SWIFT_EMIT_LOC_STRINGS: NO
+        ENABLE_TESTABILITY: YES
+    scheme:
+      testTargets:
+        - KikitoriUITests
+
+  # 只在 Mac 上跑，CI 的 build action 不會碰到它。
+  # 用途是讓開發時能自動走過各個畫面並留下截圖，不必手動點。
+  KikitoriUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Kikitori
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.o19750120.kikitori.uitests
+        TEST_TARGET_NAME: Kikitori
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO

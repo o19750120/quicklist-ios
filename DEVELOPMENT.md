@@ -94,6 +94,21 @@ open Kikitori.xcodeproj   # 或直接在 Xcode 裡 ⌘R
 - **看得到 console**，`print` 和錯誤訊息直接出現在 Xcode 底下
 - **SwiftUI 預覽**：`ContentView` 那類檔案按 ⌥⌘P 就能即時預覽
 - **中斷點**除錯，能一行一行看變數
+- **自動走過所有畫面並截圖**（見下）
+
+```bash
+./scripts/tour.sh
+```
+
+模擬器會自己從主畫面點進書庫、再點進某一集的閱讀畫面，
+每一步都截圖存到 `build/screens/`。改完版面跑這支就好，
+不必自己一路點過去確認。
+
+路線寫在 `UITests/ScreenTour.swift`，要多看幾個畫面就改那裡。
+定位元件時記得用 `accessibilityIdentifier`，
+用 `element(boundBy:)` 按順序猜會抓到工具列的按鈕。
+
+這個 UI 測試 target 只在 Mac 上跑，CI 只做 `build` 不做 `test`，不受影響。
 
 Spotify 連動在模擬器上一樣能用 —— 它走的是 Web API，
 只要你在別的地方（手機、Spotify 網頁版）播放，模擬器就讀得到。

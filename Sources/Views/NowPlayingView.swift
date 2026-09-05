@@ -91,6 +91,7 @@ struct NowPlayingView: View {
                 Image(systemName: "books.vertical")
             }
             .tint(Theme.textSecondary)
+            .accessibilityIdentifier("toolbar.library")
         }
 
         ToolbarItem(placement: .topBarLeading) {

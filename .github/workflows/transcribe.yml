@@ -54,10 +54,21 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: 安裝 ffmpeg
+        run: |
+          # runner 沒有預裝。缺了它有兩個後果，而且都是靜默的：
+          # 涵蓋檢查量不到音檔長度會自己跳過，Whisper 備援也壓縮不了音檔。
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
       - name: 環境資訊
         run: |
+          set -euo pipefail
           python --version
+          # 不要接管線，不然指令失敗會被 head 的退出碼蓋掉，
+          # 這正是先前 ffmpeg 沒裝卻沒人發現的原因
           ffmpeg -version | head -1
+          ffprobe -version | head -1
           echo "觸發方式：${{ github.event_name }}"
 
       - name: 手動指定的單集

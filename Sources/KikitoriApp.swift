@@ -3,11 +3,19 @@ import SwiftUI
 @main
 struct KikitoriApp: App {
     @StateObject private var auth = SpotifyAuth()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(auth)
+                .task { Telemetry.shared.start() }
+        }
+        .onChange(of: scenePhase) { phase in
+            // 切出去之前先把紀錄送出，不然關掉 App 就沒了
+            if phase != .active {
+                Task { await Telemetry.shared.flush() }
+            }
         }
     }
 }

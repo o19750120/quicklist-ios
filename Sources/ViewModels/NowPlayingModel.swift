@@ -87,6 +87,10 @@ final class NowPlayingModel: ObservableObject {
                 // 但學語言一定會暫停 —— 停下來查單字、重聽、抄筆記，
                 // 這時候把逐字稿收走等於廢掉這支 App。
                 // 所以保留最後一集的內容，只把進度停住。
+                if !isDisconnected {
+                    // 只在狀態轉換時記一次，不然每 5 秒就寫一筆
+                    logInfo("Spotify", "回報沒有裝置在播，畫面保留在最後一集")
+                }
                 isDisconnected = true
                 statusMessage = nil
                 if var last = nowPlaying {

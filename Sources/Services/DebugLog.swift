@@ -52,9 +52,15 @@ final class DebugLog: ObservableObject {
 }
 
 func logInfo(_ category: String, _ message: String) {
-    Task { @MainActor in DebugLog.shared.write(category, message) }
+    Task { @MainActor in
+        DebugLog.shared.write(category, message)
+        Telemetry.shared.record(level: "info", category: category, message: message)
+    }
 }
 
 func logError(_ category: String, _ message: String) {
-    Task { @MainActor in DebugLog.shared.write(category, message, isError: true) }
+    Task { @MainActor in
+        DebugLog.shared.write(category, message, isError: true)
+        Telemetry.shared.record(level: "error", category: category, message: message)
+    }
 }

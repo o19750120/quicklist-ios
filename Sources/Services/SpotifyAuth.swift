@@ -104,10 +104,13 @@ final class SpotifyAuth: ObservableObject {
 
             try await exchange(code: code, verifier: verifier)
             isAuthorized = true
+            logInfo("Spotify", "授權成功")
         } catch AuthError.cancelled {
+            logInfo("Spotify", "使用者取消授權")
             return
         } catch {
             lastError = error.localizedDescription
+            logError("Spotify", "授權失敗：\(error.localizedDescription)")
         }
     }
 

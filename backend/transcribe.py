@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import providers  # noqa: E402
 from find_episode import find_episode  # noqa: E402
+import verify  # noqa: E402
 from segment import resegment, stats  # noqa: E402
 from supabase_client import Supabase  # noqa: E402
 
@@ -49,8 +50,17 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
     show, episode = match
     log(f"對到 RSS：{show.name} / {episode.title}（相似度 {episode.match_score:.2f}）")
 
+    # 先量音檔實際長度，轉錄結果要拿它驗證涵蓋範圍。
+    # ffprobe 讀網址就能拿到，不必先下載整個檔案。
+    try:
+        audio_seconds = verify.probe_duration(episode.audio_url)
+        log(f"音檔長度 {audio_seconds/60:.1f} 分")
+    except Exception as exc:
+        audio_seconds = None
+        log(f"量不到音檔長度（{exc}），這次跳過涵蓋檢查")
+
     stage("轉錄中")
-    words, model = providers.transcribe(episode.audio_url, language)
+    words, model = providers.transcribe(episode.audio_url, language, audio_seconds)
 
     stage("斷句")
     lines = resegment(words)

@@ -228,13 +228,42 @@ def transcribe_groq(audio_url: str, language: str) -> list[Word]:
     return words
 
 
-def transcribe(audio_url: str, language: str) -> tuple[list[Word], str]:
-    """先試 Deepgram，不行才退回 Whisper。回傳詞清單與實際用了哪一家。"""
-    try:
-        return transcribe_deepgram(audio_url, language), f"deepgram:{DEEPGRAM_MODEL}"
-    except Exception as exc:
-        log(f"Deepgram 失敗（{exc}），改用 Groq Whisper")
-        return transcribe_groq(audio_url, language), f"groq:{WHISPER_MODEL}"
+def transcribe(audio_url: str, language: str,
+               audio_seconds: float | None = None) -> tuple[list[Word], str]:
+    """轉錄音檔。先試 Deepgram，不行才退回 Whisper。
+
+    給了 audio_seconds 的話，每一家的結果都會先驗證涵蓋範圍才採用 ——
+    只轉到一半卻回報成功是最糟的失敗，App 上看起來一切正常，
+    聽到中途逐字稿就沒了。涵蓋不足就當作這家失敗，換下一家。
+    """
+    import verify
+
+    attempts = (
+        (f"deepgram:{DEEPGRAM_MODEL}", lambda: transcribe_deepgram(audio_url, language)),
+        (f"groq:{WHISPER_MODEL}", lambda: transcribe_groq(audio_url, language)),
+    )
+
+    last_error: str | None = None
+
+    for name, run in attempts:
+        try:
+            words = run()
+        except Exception as exc:
+            last_error = f"{name} {exc}"
+            log(f"{name} 失敗（{exc}），換下一家")
+            continue
+
+        if audio_seconds:
+            report = verify.check(words, audio_seconds)
+            if not report.ok:
+                last_error = f"{name} {report.summary()}"
+                log(f"{name} 涵蓋檢查沒過：{report.summary()}，換下一家")
+                continue
+            log(f"{name} 涵蓋檢查通過（{report.coverage_ratio*100:.1f}%）")
+
+        return words, name
+
+    raise RuntimeError(f"所有轉錄服務都不可用或結果不完整：{last_error}")
 
 
 # ---------------------------------------------------------------------------

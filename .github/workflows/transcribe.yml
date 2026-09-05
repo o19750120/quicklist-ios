@@ -24,8 +24,8 @@ on:
   repository_dispatch:
     types: [transcribe]
   schedule:
-    # 定期撿沒人處理的排隊任務
-    - cron: "*/15 * * * *"
+    # 定期撿排隊中的任務（GitHub 最短就是 5 分鐘，實際還會再延遲一點）
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: read
@@ -42,7 +42,9 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
+      GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
 
     steps:
       - uses: actions/checkout@v5

@@ -31,7 +31,7 @@ env.load()
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Kikitori/0.1"
 
-DEEPGRAM_MODEL = "nova-2"
+DEEPGRAM_MODEL = "nova-3"
 WHISPER_MODEL = "whisper-large-v3"
 # 不寫死模型名稱 —— 服務商一下架就會靜默失敗。
 # 實際上就發生過：llama-3.3-70b-versatile 被 Groq 下架，
@@ -94,11 +94,23 @@ def transcribe_deepgram(audio_url: str, language: str) -> list[Word]:
     if not key:
         raise RuntimeError("沒有 DEEPGRAM_API_KEY")
 
+    # 用 multi 而不是指定單一語言。
+    #
+    # 實測發現：指定 language=ja 去轉英文段落時，Deepgram 不會跳過，
+    # 而是把英文音節硬拼成假名（"thankyouismaybeyouronecoose。。。"），
+    # 那串垃圾會被當成正常內容寫進逐字稿，再拿去翻譯 —— 它看起來像資料不像錯誤。
+    # バイリンガルニュース 那種雙語節目有 36% 的內容會變成這樣。
+    #
+    # multi 在純日文節目上也沒有變差：實測填充詞 16 vs 14、語尾助詞 51 vs 46，
+    # 反而保留得更多，速度也更快。
+    #
+    # diarize 順便開著。它會自動判斷有幾個人，不必事先指定，
+    # 純獨白節目就回報一位，沒有副作用。
     params = (
-        f"model={DEEPGRAM_MODEL}&language={language}"
-        "&punctuate=true&smart_format=true&utterances=true"
+        f"model={DEEPGRAM_MODEL}&language=multi"
+        "&punctuate=true&smart_format=true&utterances=true&diarize=true"
     )
-    log(f"Deepgram 轉錄（{language}），直接讀取音檔網址")
+    log(f"Deepgram 轉錄（{DEEPGRAM_MODEL} / multi），直接讀取音檔網址")
 
     payload = _post(
         f"https://api.deepgram.com/v1/listen?{params}",

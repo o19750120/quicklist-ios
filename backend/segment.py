@@ -12,6 +12,7 @@ Deepgram 的日文結果有個特性：句號會黏在**下一個詞**的開頭
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 # 句子結束的標點。中日文與半形都收。
@@ -59,10 +60,29 @@ def from_deepgram(words: list[dict]) -> list[Word]:
     ]
 
 
+_LATIN_END = re.compile(r"[A-Za-z0-9]$")
+_LATIN_START = re.compile(r"^[A-Za-z0-9]")
+
+
+def join_words(words: list[Word]) -> str:
+    """把詞接成句子。
+
+    日文詞之間不加空格，但英文要 —— 節目裡混英文時直接串起來會變成
+    "thinkitismaybeaonecause" 這種讀不出來的東西。
+    只有前後都是拉丁字母或數字時才補空格。
+    """
+    parts: list[str] = []
+    for word in words:
+        if parts and _LATIN_END.search(parts[-1]) and _LATIN_START.match(word.text):
+            parts.append(" ")
+        parts.append(word.text)
+    return "".join(parts)
+
+
 def _flush(buffer: list[Word], lines: list[Line]) -> None:
     if not buffer:
         return
-    text = "".join(w.text for w in buffer).strip()
+    text = join_words(buffer).strip()
     if not text:
         buffer.clear()
         return

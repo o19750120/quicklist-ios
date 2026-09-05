@@ -153,9 +153,19 @@
 
 ### 架構評估
 
-- [x] 確認 `gemini-3.5-transcribe` 可用（2026-08 發布），有詞級時間戳、
-      說話者辨識、自訂詞彙偏向。限制：啟用詞級時間戳時單檔上限 30 分鐘，
-      且準確度會略降
+- [x] **`gemini-3.5-transcribe` 實測完畢並納入架構，排在第一順位**
+      關鍵是 `"type": "verbatim"` 模式：同一集填充詞保留 60 個，
+      Deepgram 16、Whisper 14。對「聽 podcast 學日語」這是功能差異不是邊際改善。
+      代價是慢十倍（30 秒 vs 3 秒）。
+      實作細節：詞級時間戳只有 `/v1beta/interactions` 端點支援
+      （generateContent 傳 transcription_config 會 400）；音檔走 inline base64
+      而非 File API（File API 的檔案綁金鑰，跟多金鑰輪替打架）；
+      講者資訊只掛在 word annotation 上，單獨開 diarization 會拿到空的。
+      時間戳可信範圍實測：31 分以內乾淨、35 分開始缺尾、45 分出現鬼值、
+      55 分只轉到 63%、60 分直接 400 —— 所以切在 28 分。
+- [x] 但它不是永遠可靠：`日本語の森` 那集只轉出 460 詞（Deepgram 1305），
+      中間漏掉 56%、語速每秒 0.8 字。涵蓋驗證擋下來並自動退到 Deepgram ——
+      沒有那道檢查的話，那份殘缺逐字稿會直接進資料庫且表面正常
 - [ ] 實測比較：Deepgram vs Whisper vs gemini-3.5-transcribe，同一集音檔
 - [ ] 規劃中的流程：Whisper 與 Gemini 各自轉一份，再用另一個 Gemini
       對照兩份產出最終版

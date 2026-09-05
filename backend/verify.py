@@ -90,6 +90,14 @@ def check(words: list[Word], audio_seconds: float) -> Report:
         report.problems.append(
             f"結尾少了 {tail_gap/60:.1f} 分鐘沒轉到")
 
+    # 反過來也要查：時間戳跑到音檔長度之外。
+    # 這代表時間軸算錯了（切段偏移累加錯、或引擎回傳了壞值），
+    # 逐字稿會停在使用者永遠聽不到的位置。
+    # 原本只檢查「比音檔短」，這種「比音檔長」的情況會整個溜過去。
+    if last_end > audio_seconds + 5.0:
+        report.problems.append(
+            f"時間戳超出音檔結尾 {last_end - audio_seconds:.0f} 秒，時間軸算錯了")
+
     # 中間的空洞。真的靜默半分鐘以上的節目很少見，多半是漏段。
     previous_end = ordered[0].start
     for word in ordered:

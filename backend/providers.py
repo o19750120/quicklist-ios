@@ -139,6 +139,139 @@ def transcribe_deepgram(audio_url: str, language: str) -> list[Word]:
     ]
 
 
+GEMINI_TRANSCRIBE_MODEL = "gemini-3.5-transcribe"
+# 開詞級時間戳之後的實測邊界：31 分以內乾淨，35 分開始有 annotation 缺尾，
+# 45 分時間戳出現鬼值，55 分只轉到 63%，60 分直接 400。
+# 留一點餘裕切在 28 分。
+GEMINI_MAX_MINUTES = 28
+
+
+def _parse_offset(value: str | None) -> float:
+    """把 "0.400s" 這種格式轉成秒。"""
+    if not value:
+        return 0.0
+    return float(str(value).rstrip("s") or 0)
+
+
+def _gemini_transcribe_clip(path: Path, key: str, offset_seconds: float = 0.0) -> list[Word]:
+    """把一段音檔送去 gemini-3.5-transcribe。
+
+    詞級時間戳只有 /v1beta/interactions 端點支援，
+    generateContent 傳 transcription_config 會直接 400。
+
+    音檔走 inline base64 而不是 File API，有兩個理由：
+    一是 10 分鐘的節目壓縮後才 2MB 多，上傳那一步純屬多餘；
+    二是 File API 上傳的檔案綁金鑰，用 A 金鑰上傳、B 金鑰呼叫會 403，
+    那會跟我們的多金鑰輪替打架。
+    """
+    import base64
+
+    payload = {
+        "model": GEMINI_TRANSCRIBE_MODEL,
+        "input": [{
+            "type": "audio",
+            "data": base64.b64encode(path.read_bytes()).decode(),
+            "mime_type": "audio/mp3",
+        }],
+        "generation_config": {"transcription_config": {"mode": {
+            # verbatim 是保留口語填充詞的關鍵。實測同一集：
+            # 這個模式下填充詞 60 個，Deepgram 只有 2 個、Whisper 3 個。
+            "type": "verbatim",
+            "timestamp_granularities": ["word"],
+            # 講者資訊只掛在 word annotation 上，
+            # 所以單獨開 diarization 會拿到空的，必須跟時間戳一起開。
+            "diarization_mode": "speaker",
+        }}},
+    }
+
+    response = _post(
+        "https://generativelanguage.googleapis.com/v1beta/interactions",
+        json.dumps(payload).encode(),
+        {"x-goog-api-key": key, "Content-Type": "application/json"},
+        timeout=900,
+    )
+
+    steps = response.get("steps") or []
+    if not steps:
+        raise RuntimeError("Gemini 沒有回傳 steps")
+    contents = steps[0].get("content") or []
+    if not contents:
+        raise RuntimeError("Gemini 沒有回傳內容")
+
+    words: list[Word] = []
+    for item in contents[0].get("annotations") or []:
+        text = (item.get("text") or "").strip()
+        if not text or item.get("type") not in (None, "word_info"):
+            continue
+        speaker = item.get("speaker")
+        if isinstance(speaker, str) and ":" in speaker:
+            # 標籤長這樣："spk:0"
+            speaker = int(speaker.split(":")[-1]) if speaker.split(":")[-1].isdigit() else None
+        words.append(Word(
+            text=text,
+            start=_parse_offset(item.get("start_offset")) + offset_seconds,
+            end=_parse_offset(item.get("end_offset")) + offset_seconds,
+            speaker=speaker if isinstance(speaker, int) else None,
+        ))
+
+    if not words:
+        raise RuntimeError("Gemini 沒有回傳詞級時間戳")
+    return words
+
+
+def transcribe_gemini(audio_url: str, language: str) -> list[Word]:
+    """用 gemini-3.5-transcribe 轉錄。
+
+    比 Deepgram 慢五倍以上，但填充詞保留度差三十倍 ——
+    對「聽 podcast 學日語」來說那不是邊際改善，
+    學習者要聽懂真實對話，靠的正是「あの」「えーと」「〜ね」這些東西。
+    """
+    keys = _keys("GEMINI_API_KEYS")
+    if not keys:
+        raise RuntimeError("沒有 GEMINI_API_KEYS")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        workdir = Path(tmp)
+        log("下載音檔")
+        raw = _download(audio_url, workdir / "raw_audio")
+
+        compressed = workdir / "clip.mp3"
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(raw),
+             "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "48k", str(compressed)],
+            check=True,
+        )
+        raw.unlink(missing_ok=True)
+
+        total = _probe_duration(compressed)
+        segment_seconds = GEMINI_MAX_MINUTES * 60
+
+        if total <= segment_seconds:
+            parts = [compressed]
+        else:
+            log(f"共 {total/60:.1f} 分，超過 {GEMINI_MAX_MINUTES} 分的時間戳可信範圍，切段")
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(compressed),
+                 "-f", "segment", "-segment_time", str(segment_seconds),
+                 "-reset_timestamps", "1", "-c", "copy", str(workdir / "part_%03d.mp3")],
+                check=True,
+            )
+            parts = sorted(workdir.glob("part_*.mp3"))
+
+        words: list[Word] = []
+        offset = 0.0
+        for index, part in enumerate(parts):
+            size_mb = part.stat().st_size / 1048576
+            log(f"Gemini 轉錄第 {index+1}/{len(parts)} 段（{size_mb:.1f} MB）")
+            # 時間軸用實際長度累加，用固定值推算會愈後面愈歪
+            duration = _probe_duration(part)
+            words.extend(_gemini_transcribe_clip(part, keys[index % len(keys)], offset))
+            offset += duration
+
+    log(f"Gemini 完成，{len(words)} 個詞")
+    return words
+
+
 def _download(url: str, target: Path) -> Path:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=900) as response, open(target, "wb") as out:
@@ -251,7 +384,14 @@ def transcribe(audio_url: str, language: str,
     """
     import verify
 
+    # 順序是照「口語保真度」排的，不是照速度。
+    #
+    # Gemini 的 verbatim 模式填充詞保留 60 個，Deepgram 16 個、Whisper 14 個 ——
+    # 對「聽 podcast 學日語」來說，「あの」「えーと」「〜ね」是內容不是雜訊，
+    # 學習者要聽懂真實對話靠的就是這些。代價是慢十倍，值得。
+    # 撞到配額或長度限制時，後面兩家仍然可用。
     attempts = (
+        (f"gemini:{GEMINI_TRANSCRIBE_MODEL}", lambda: transcribe_gemini(audio_url, language)),
         (f"deepgram:{DEEPGRAM_MODEL}", lambda: transcribe_deepgram(audio_url, language)),
         (f"groq:{WHISPER_MODEL}", lambda: transcribe_groq(audio_url, language)),
     )

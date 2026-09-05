@@ -32,6 +32,8 @@ class Word:
     text: str
     start: float
     end: float
+    # 說話者編號。轉錄服務有開 diarization 才有值，獨白節目全是 0。
+    speaker: int | None = None
 
 
 @dataclass
@@ -39,13 +41,18 @@ class Line:
     text: str
     start: float
     end: float
+    speaker: int | None = None
 
     def as_row(self, offset_ms: int = 0) -> dict:
-        return {
+        row = {
             "start_ms": int(self.start * 1000) + offset_ms,
             "end_ms": int(self.end * 1000) + offset_ms,
             "text": self.text,
         }
+        # 只有真的辨識到才寫，獨白節目不必多這個欄位
+        if self.speaker is not None:
+            row["speaker"] = self.speaker
+        return row
 
 
 def from_deepgram(words: list[dict]) -> list[Word]:
@@ -87,7 +94,10 @@ def _flush(buffer: list[Word], lines: list[Line]) -> None:
         buffer.clear()
         return
 
-    line = Line(text=text, start=buffer[0].start, end=buffer[-1].end)
+    speakers = [w.speaker for w in buffer if w.speaker is not None]
+    dominant = max(set(speakers), key=speakers.count) if speakers else None
+
+    line = Line(text=text, start=buffer[0].start, end=buffer[-1].end, speaker=dominant)
 
     # 太短的碎片（辨識雜訊、單一語助詞）併進前一句，避免畫面一直跳。
     # 但只有在時間上真的接得起來時才併，不然會把隔了幾十秒的碎片黏過去，
@@ -99,7 +109,7 @@ def _flush(buffer: list[Word], lines: list[Line]) -> None:
         and (line.start - lines[-1].end) < SILENCE_BREAK
     ):
         previous = lines[-1]
-        lines[-1] = Line(previous.text + text, previous.start, line.end)
+        lines[-1] = Line(previous.text + text, previous.start, line.end, previous.speaker)
     else:
         lines.append(line)
 
@@ -154,7 +164,7 @@ def resegment(words: list[Word]) -> list[Line]:
 
         if leading and buffer:
             tail = buffer[-1]
-            buffer[-1] = Word(tail.text + leading, tail.start, tail.end)
+            buffer[-1] = Word(tail.text + leading, tail.start, tail.end, tail.speaker)
             _flush(buffer, lines)
 
         # 逗號同樣黏在下一個詞的開頭，也要還給前一句。
@@ -166,12 +176,12 @@ def resegment(words: list[Word]) -> list[Line]:
 
         if leading_clause and buffer:
             tail = buffer[-1]
-            buffer[-1] = Word(tail.text + leading_clause, tail.start, tail.end)
+            buffer[-1] = Word(tail.text + leading_clause, tail.start, tail.end, tail.speaker)
 
         if not text:
             continue
 
-        current = Word(text, word.start, word.end)
+        current = Word(text, word.start, word.end, word.speaker)
 
         # 明顯的停頓也是自然的斷點
         if buffer and (current.start - buffer[-1].end) >= SILENCE_BREAK:

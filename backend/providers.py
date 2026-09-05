@@ -132,6 +132,7 @@ def transcribe_deepgram(audio_url: str, language: str) -> list[Word]:
             text=(w.get("punctuated_word") or w.get("word") or ""),
             start=float(w.get("start", 0)),
             end=float(w.get("end", 0)),
+            speaker=w.get("speaker"),
         )
         for w in words
         if (w.get("punctuated_word") or w.get("word"))

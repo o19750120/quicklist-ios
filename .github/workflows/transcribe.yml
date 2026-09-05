@@ -1,6 +1,6 @@
 name: Transcribe episode
 
-# 轉錄不需要 macOS，用 Ubuntu 快得多，而且 runner 內建 ffmpeg。
+# 轉錄不需要 macOS，用 Ubuntu 快得多。ffmpeg 要自己裝，runner 沒有預裝。
 on:
   workflow_dispatch:
     inputs:

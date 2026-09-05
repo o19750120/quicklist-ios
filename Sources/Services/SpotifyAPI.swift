@@ -61,4 +61,38 @@ struct SpotifyAPI {
             throw APIError.http(http.statusCode, message)
         }
     }
+
+    /// 把播放位置跳到指定毫秒。逐句重聽靠這個。
+    /// 控制播放需要 Premium，免費帳號會收到 403。
+    func seek(toMs positionMs: Int) async throws {
+        let token = try await auth.validAccessToken()
+
+        var components = URLComponents(string: "https://api.spotify.com/v1/me/player/seek")!
+        components.queryItems = [
+            URLQueryItem(name: "position_ms", value: String(max(0, positionMs)))
+        ]
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("0", forHTTPHeaderField: "Content-Length")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.http(0, "沒有收到 HTTP 回應")
+        }
+
+        switch http.statusCode {
+        case 200, 202, 204:
+            return
+        case 403:
+            throw APIError.http(403, "跳轉需要 Spotify Premium")
+        case 404:
+            throw APIError.http(404, "找不到播放中的裝置，先在 Spotify 按播放")
+        default:
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let error = json?["error"] as? [String: Any]
+            throw APIError.http(http.statusCode, error?["message"] as? String ?? "跳轉失敗")
+        }
+    }
 }

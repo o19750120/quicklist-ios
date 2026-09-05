@@ -1,46 +1,47 @@
 import SwiftUI
 
-/// 顯示 Spotify 目前正在播什麼，並讓進度即時跟著跑。
-/// 這是整條連動的驗證畫面：這裡會動，代表逐字稿同步的基礎成立。
+/// 主畫面：上方顯示 Spotify 正在播什麼，下方是跟著跑的逐字稿。
 struct NowPlayingView: View {
     @EnvironmentObject private var auth: SpotifyAuth
     @ObservedObject var model: NowPlayingModel
+    @StateObject private var transcriptModel = TranscriptModel()
+
     @State private var showSettings = false
+    @State private var showDiagnostics = false
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 28) {
-                    if let playing = model.nowPlaying {
-                        artwork(for: playing)
-                        titleBlock(for: playing)
-                        progressBlock(for: playing)
-                        transcriptPlaceholder(for: playing)
+            VStack(spacing: 0) {
+                if let playing = model.nowPlaying {
+                    header(playing)
+
+                    Rectangle()
+                        .fill(Theme.surfaceRaised)
+                        .frame(height: 1)
+
+                    if playing.kind == .episode {
+                        TranscriptView(
+                            transcriptModel: transcriptModel,
+                            nowPlayingModel: model,
+                            episode: playing
+                        )
                     } else {
-                        idleState
+                        notAPodcast
                     }
+                } else {
+                    idleState
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 12)
-                .padding(.bottom, 40)
             }
             .navigationTitle("Kikitori")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .tint(Theme.textSecondary)
-                }
-            }
+            .toolbar { toolbarContent }
             .kikitoriBackground()
-            .scrollContentBackground(.hidden)
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView(model: model)
+            SettingsView(model: model).environmentObject(auth)
+        }
+        .sheet(isPresented: $showDiagnostics) {
+            DiagnosticsView(model: model, transcriptModel: transcriptModel)
                 .environmentObject(auth)
         }
         .task {
@@ -48,122 +49,148 @@ struct NowPlayingView: View {
         }
         .onDisappear {
             model.stop()
+            transcriptModel.stopPolling()
+        }
+        .onChange(of: model.nowPlaying?.id) { newID in
+            guard let newID, model.nowPlaying?.kind == .episode else { return }
+            Task { await transcriptModel.loadIfNeeded(episodeID: newID) }
+        }
+        .onChange(of: model.displayProgressMs) { _ in
+            transcriptModel.updatePosition(model.alignedProgressMs)
         }
     }
 
-    // MARK: - 封面
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            if transcriptModel.hasTranscript {
+                Button {
+                    transcriptModel.showTranslation.toggle()
+                } label: {
+                    Image(systemName: transcriptModel.showTranslation
+                          ? "character.book.closed.fill"
+                          : "character.book.closed")
+                }
+                .tint(transcriptModel.showTranslation ? Theme.accent : Theme.textSecondary)
+            }
+        }
 
-    private func artwork(for playing: NowPlaying) -> some View {
-        AsyncImage(url: playing.artworkURL) { phase in
-            switch phase {
-            case .success(let image):
-                image
-                    .resizable()
-                    .aspectRatio(1, contentMode: .fit)
-            default:
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Theme.surfaceRaised)
-                    .aspectRatio(1, contentMode: .fit)
-                    .overlay {
-                        Image(systemName: playing.kind == .episode ? "mic.fill" : "music.note")
-                            .font(.system(size: 44))
-                            .foregroundStyle(Theme.textSecondary)
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Button {
+                    showSettings = true
+                } label: {
+                    Label("設定", systemImage: "gearshape")
+                }
+                Button {
+                    showDiagnostics = true
+                } label: {
+                    Label("診斷", systemImage: "stethoscope")
+                }
+                if model.alignmentOffsetMs != 0 {
+                    Button {
+                        model.resetAlignment()
+                    } label: {
+                        Label("清除對齊偏移", systemImage: "arrow.counterclockwise")
                     }
-            }
-        }
-        .frame(maxWidth: 320)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: .black.opacity(0.5), radius: 24, y: 12)
-    }
-
-    // MARK: - 標題
-
-    private func titleBlock(for playing: NowPlaying) -> some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(playing.isPlaying ? Theme.spotifyGreen : Theme.textSecondary)
-                    .frame(width: 7, height: 7)
-                Text(playing.isPlaying ? "播放中" : "已暫停")
-                    .font(.caption)
-                    .foregroundStyle(Theme.textSecondary)
-                if playing.kind == .episode {
-                    Text("· Podcast")
-                        .font(.caption)
-                        .foregroundStyle(Theme.textSecondary)
                 }
+            } label: {
+                Image(systemName: "ellipsis.circle")
             }
-
-            Text(playing.title)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(Theme.textPrimary)
-                .multilineTextAlignment(.center)
-                .lineLimit(3)
-
-            if !playing.subtitle.isEmpty {
-                Text(playing.subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-            }
+            .tint(Theme.textSecondary)
         }
     }
 
-    // MARK: - 進度
+    // MARK: - 上方資訊列
 
-    private func progressBlock(for playing: NowPlaying) -> some View {
-        VStack(spacing: 10) {
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Theme.surfaceRaised)
-                    Capsule()
-                        .fill(Theme.accent)
-                        .frame(width: geo.size.width * progressFraction(for: playing))
+    private func header(_ playing: NowPlaying) -> some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 14) {
+                AsyncImage(url: playing.artworkURL) { phase in
+                    if case .success(let image) = phase {
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        Theme.surfaceRaised
+                    }
                 }
-            }
-            .frame(height: 5)
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-            HStack {
-                Text(model.displayProgressMs.asPlaybackTime)
-                Spacer()
-                Text(playing.durationMs.asPlaybackTime)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(playing.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(2)
+
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(playing.isPlaying ? Theme.spotifyGreen : Theme.textSecondary)
+                            .frame(width: 6, height: 6)
+                        Text(playing.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 0)
             }
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(Theme.textSecondary)
+
+            VStack(spacing: 6) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Theme.surfaceRaised)
+                        Capsule()
+                            .fill(Theme.accent)
+                            .frame(width: geo.size.width * progressFraction(playing))
+                    }
+                }
+                .frame(height: 4)
+
+                HStack {
+                    Text(model.displayProgressMs.asPlaybackTime)
+                    if model.alignmentOffsetMs != 0 {
+                        Text(offsetLabel)
+                            .foregroundStyle(Theme.accent)
+                    }
+                    Spacer()
+                    Text(playing.durationMs.asPlaybackTime)
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(Theme.textSecondary)
+            }
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .padding(.bottom, 14)
     }
 
-    private func progressFraction(for playing: NowPlaying) -> Double {
+    private var offsetLabel: String {
+        String(format: "校正 %+.1fs", Double(model.alignmentOffsetMs) / 1000)
+    }
+
+    private func progressFraction(_ playing: NowPlaying) -> Double {
         guard playing.durationMs > 0 else { return 0 }
         return min(1, max(0, Double(model.displayProgressMs) / Double(playing.durationMs)))
     }
 
-    // MARK: - 逐字稿（下一階段）
+    // MARK: - 其他狀態
 
-    private func transcriptPlaceholder(for playing: NowPlaying) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("逐字稿", systemImage: "text.alignleft")
+    private var notAPodcast: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "music.note")
+                .font(.system(size: 38))
+                .foregroundStyle(Theme.textSecondary)
+            Text("現在播的是歌曲")
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(Theme.textPrimary)
-
-            if playing.kind == .episode {
-                Text("下一步會在這裡逐句顯示日文與翻譯，並跟著上面的進度走。")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.textSecondary)
-            } else {
-                Text("現在播的是歌曲。這支 App 是為 podcast 做的，去 Spotify 播一集節目再回來。")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.textSecondary)
-            }
+            Text("Kikitori 是為 podcast 做的。\n去 Spotify 播一集節目再回來。")
+                .font(.caption)
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
-    // MARK: - 沒在播的狀態
 
     private var idleState: some View {
         VStack(spacing: 16) {
@@ -175,6 +202,7 @@ struct NowPlayingView: View {
                 .font(.subheadline)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
 
             Button {
                 Task { await model.refresh() }
@@ -187,6 +215,6 @@ struct NowPlayingView: View {
             }
             .tint(Theme.textPrimary)
         }
-        .padding(.top, 80)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

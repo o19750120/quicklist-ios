@@ -44,22 +44,39 @@ jobs:
           find . -path ./.git -prune -o -type f -print | sort
           echo "::endgroup::"
 
-      - name: 注入 Spotify Client ID
+      - name: 注入建置金鑰
         env:
           CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SB_URL: ${{ secrets.SUPABASE_URL }}
+          SB_ANON: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
-          TARGET=Sources/Generated/BuildSecrets.swift
-          if [ -z "$CLIENT_ID" ]; then
-            echo "沒有設定 SPOTIFY_CLIENT_ID，App 會要求在畫面上手動填入"
-          else
-            # 不要印出值本身，這個 repo 是公開的，Actions log 誰都看得到
-            sed -i '' "s|spotifyClientID = \"\"|spotifyClientID = \"${CLIENT_ID}\"|" "$TARGET"
-            if grep -q 'spotifyClientID = ""' "$TARGET"; then
-              echo "注入失敗，BuildSecrets 仍是空的"
-              exit 1
-            fi
-            echo "已注入 Client ID（長度 ${#CLIENT_ID}）"
-          fi
+          python3 - <<'PY'
+          import io, os
+
+          target = "Sources/Generated/BuildSecrets.swift"
+          source = io.open(target, encoding="utf-8").read()
+
+          mapping = {
+              "spotifyClientID": os.environ.get("CLIENT_ID", ""),
+              "supabaseURL": os.environ.get("SB_URL", ""),
+              "supabaseAnonKey": os.environ.get("SB_ANON", ""),
+          }
+
+          injected, missing = [], []
+          for name, value in mapping.items():
+              if value:
+                  source = source.replace(f'{name} = ""', f'{name} = "{value}"')
+                  injected.append(name)
+              else:
+                  missing.append(name)
+
+          io.open(target, "w", encoding="utf-8").write(source)
+
+          # 只印名字不印值，這個 repo 是公開的，Actions log 誰都看得到
+          print("已注入:", ", ".join(injected) or "無")
+          if missing:
+              print("缺少（App 會退回手動設定）:", ", ".join(missing))
+          PY
 
       - name: 安裝 XcodeGen
         run: |

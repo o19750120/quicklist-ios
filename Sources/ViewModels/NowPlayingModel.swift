@@ -95,6 +95,24 @@ final class NowPlayingModel: ObservableObject {
         alignmentOffsetMs = lineStartMs - displayProgressMs
     }
 
+    /// 讓 Spotify 跳到指定位置（逐句重聽）
+    func seek(toMs positionMs: Int) async {
+        do {
+            try await api.seek(toMs: positionMs)
+            displayProgressMs = positionMs
+            if var state = nowPlaying {
+                state.progressMs = positionMs
+                state.fetchedAt = Date()
+                nowPlaying = state
+            }
+            logInfo("Spotify", "跳到 \(positionMs.asPlaybackTime)")
+            statusMessage = nil
+        } catch {
+            statusMessage = error.localizedDescription
+            logError("Spotify", "跳轉失敗：\(error.localizedDescription)")
+        }
+    }
+
     func resetAlignment() {
         alignmentOffsetMs = 0
     }

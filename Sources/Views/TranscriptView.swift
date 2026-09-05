@@ -199,7 +199,8 @@ struct TranscriptView: View {
         }
         .padding(.horizontal, 32)
         .padding(.vertical, 40)
-        .frame(maxWidth: .infinity)
+        // 要撐滿剩下的高度，否則上方的資訊列會被 VStack 垂直置中推到畫面中間
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func requestButton(title: String) -> some View {

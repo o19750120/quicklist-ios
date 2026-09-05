@@ -8,6 +8,7 @@ struct NowPlayingView: View {
 
     @State private var showSettings = false
     @State private var showDiagnostics = false
+    @State private var showLibrary = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -41,6 +42,9 @@ struct NowPlayingView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(model: model).environmentObject(auth)
         }
+        .sheet(isPresented: $showLibrary) {
+            LibraryView()
+        }
         .sheet(isPresented: $showDiagnostics) {
             DiagnosticsView(model: model, transcriptModel: transcriptModel)
                 .environmentObject(auth)
@@ -62,6 +66,13 @@ struct NowPlayingView: View {
         }
         .onChange(of: model.displayProgressMs) { _ in
             transcriptModel.updatePosition(model.alignedProgressMs)
+            recordToLibrary()
+        }
+        .onChange(of: transcriptModel.transcript) { transcript in
+            // 逐字稿比播放晚一步到，到了才補記句數。
+            // 用 loadedEpisodeID 而不是現在播的那一集 —— 查詢期間可能已經換集了。
+            guard let id = transcriptModel.loadedEpisodeID else { return }
+            LibraryStore.shared.setLineCount(transcript?.lines.count ?? 0, for: id)
         }
         .onChange(of: scenePhase) { phase in
             // 從 Spotify 切回來時立刻對一次時間，不必等下一輪輪詢
@@ -73,6 +84,15 @@ struct NowPlayingView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button {
+                showLibrary = true
+            } label: {
+                Image(systemName: "books.vertical")
+            }
+            .tint(Theme.textSecondary)
+        }
+
         ToolbarItem(placement: .topBarLeading) {
             if transcriptModel.hasTranscript {
                 Button {
@@ -110,6 +130,16 @@ struct NowPlayingView: View {
             }
             .tint(Theme.textSecondary)
         }
+    }
+
+    /// 把「聽到哪」寫進書庫。LibraryStore 自己會節流，這裡照呼叫沒關係。
+    private func recordToLibrary() {
+        guard let playing = model.nowPlaying, playing.kind == .episode else { return }
+        LibraryStore.shared.record(
+            episode: playing,
+            positionMs: model.displayProgressMs,
+            lineCount: transcriptModel.lineCount(for: playing.id)
+        )
     }
 
     // MARK: - 上方資訊列

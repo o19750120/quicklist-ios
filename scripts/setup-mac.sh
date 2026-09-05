@@ -20,16 +20,54 @@ if ! xcode-select -p >/dev/null 2>&1; then
     warn "還沒裝 Xcode 命令列工具，執行：xcode-select --install"
     exit 1
 fi
-ok "Xcode $(xcodebuild -version | head -1 | cut -d' ' -f2)"
 
-if ! command -v brew >/dev/null 2>&1; then
-    warn "沒有 Homebrew。先裝它：https://brew.sh"
+# 只有命令列工具跑不了模擬器，一定要完整的 Xcode
+if ! xcodebuild -version >/dev/null 2>&1; then
+    cat <<'NOXCODE'
+  ! 目前只有命令列工具，沒有完整的 Xcode（模擬器需要它）
+
+    1. 到 App Store 安裝 Xcode（約 15 GB）
+    2. 裝完執行：
+         sudo xcodebuild -license accept
+         sudo xcodebuild -runFirstLaunch
+    3. 再跑一次這支腳本
+
+NOXCODE
     exit 1
 fi
+ok "Xcode $(xcodebuild -version | head -1 | cut -d' ' -f2)"
+
+export PATH="$HOME/.local/bin:$PATH"
+
+# brew 可能不能用（例如 /usr/local 屬於另一個帳號），
+# 那就把官方 binary 放進家目錄，不去動系統權限。
+install_xcodegen_manually() {
+    echo "  改用官方 binary 安裝 xcodegen…"
+    local tmp
+    tmp="$(mktemp -d)"
+    curl -fsSL -o "$tmp/xcodegen.zip" \
+        https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip
+    (cd "$tmp" && unzip -oq xcodegen.zip)
+    mkdir -p "$HOME/.local/bin" "$HOME/.local/share"
+    cp "$tmp/xcodegen/bin/xcodegen" "$HOME/.local/bin/xcodegen"
+    rm -rf "$HOME/.local/share/xcodegen"
+    cp -R "$tmp/xcodegen/share/xcodegen" "$HOME/.local/share/xcodegen"
+    chmod +x "$HOME/.local/bin/xcodegen"
+    xattr -dr com.apple.quarantine "$HOME/.local/bin/xcodegen" 2>/dev/null || true
+    rm -rf "$tmp"
+
+    if ! grep -q '.local/bin' "$HOME/.zshrc" 2>/dev/null; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+        warn "已把 ~/.local/bin 加進 ~/.zshrc，新開的終端機才會生效"
+    fi
+}
 
 if ! command -v xcodegen >/dev/null 2>&1; then
-    echo "  安裝 xcodegen…"
-    brew install xcodegen
+    if command -v brew >/dev/null 2>&1 && brew install xcodegen 2>/dev/null; then
+        :
+    else
+        install_xcodegen_manually
+    fi
 fi
 ok "xcodegen $(xcodegen --version 2>&1 | tail -1)"
 

@@ -14,6 +14,7 @@ struct KikitoriApp: App {
         .onChange(of: scenePhase) { phase in
             // 切出去之前先把紀錄送出，不然關掉 App 就沒了
             if phase != .active {
+                LibraryStore.shared.flush()
                 Task { await Telemetry.shared.flush() }
             }
         }

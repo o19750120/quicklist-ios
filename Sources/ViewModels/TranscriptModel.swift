@@ -13,10 +13,18 @@ final class TranscriptModel: ObservableObject {
     @Published var showTranslation = true
 
     private let service = SupabaseService()
-    private var loadedEpisodeID: String?
+    /// 目前這份逐字稿是哪一集的。外面要拿句數時得先確認是同一集，
+    /// 不然換集的瞬間會把上一集的數字算到新的那一集頭上。
+    private(set) var loadedEpisodeID: String?
     private var pollTask: Task<Void, Never>?
 
     var hasTranscript: Bool { !(transcript?.isEmpty ?? true) }
+
+    /// 這一集的句數。逐字稿還沒載到、或載到的是別集的，一律回 0。
+    func lineCount(for episodeID: String) -> Int {
+        guard loadedEpisodeID == episodeID else { return 0 }
+        return transcript?.lines.count ?? 0
+    }
     var isConfigured: Bool { service.isConfigured }
 
     // MARK: - 載入

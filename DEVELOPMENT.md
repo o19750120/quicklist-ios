@@ -15,7 +15,9 @@ cd kikitori
 ./scripts/setup-mac.sh
 ```
 
-腳本會裝 xcodegen、從私密 gist 取得金鑰、產生 `.xcodeproj`。完成後：
+腳本會裝 xcodegen、把 `.env.local` 的金鑰注入 `BuildSecrets.swift`、
+產生 `.xcodeproj`。金鑰要自己從另一台搬過來（不放任何雲端），
+範本見 `.env.local.example`。完成後：
 
 ```bash
 open Kikitori.xcodeproj
@@ -27,10 +29,49 @@ open Kikitori.xcodeproj
 
 | 需要 | 怎麼裝 |
 |---|---|
-| Xcode | App Store |
+| Xcode | App Store（約 15 GB，**只裝命令列工具不夠**，模擬器要完整 Xcode） |
+| iOS 模擬器 runtime | `xcodebuild -downloadPlatform iOS`（約 8 GB，Xcode 26 起不內建） |
 | 命令列工具 | `xcode-select --install` |
 | Homebrew | <https://brew.sh> |
 | GitHub CLI 並登入 | `brew install gh && gh auth login` |
+
+裝完 Xcode 後要先同意授權，否則 `simctl` 一律報錯：
+
+```bash
+sudo xcodebuild -license accept
+sudo xcodebuild -runFirstLaunch
+```
+
+### Mac 上的三個坑
+
+**1. Homebrew 裝不動**（`/usr/local/share/*` 不屬於你，多半是另一個帳號裝的 brew）
+
+不必動系統權限，官方 binary 直接放家目錄就好：
+
+```bash
+mkdir -p ~/.local/bin ~/.local/share
+curl -L -o /tmp/x.zip https://github.com/yonaskolb/XcodeGen/releases/latest/download/xcodegen.zip
+cd /tmp && unzip -oq x.zip
+cp xcodegen/bin/xcodegen ~/.local/bin/ && cp -R xcodegen/share/xcodegen ~/.local/share/
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+```
+
+`gh` 同理，從 <https://github.com/cli/cli/releases> 抓 `macOS_arm64.zip`。
+
+**2. `backend/*.py` 報 SSL CERTIFICATE_VERIFY_FAILED**
+
+python.org 版的 Python 沒有系統根憑證。裝 certifi 並指過去：
+
+```bash
+python3 -m pip install --user certifi
+echo 'export SSL_CERT_FILE="$HOME/Library/Python/3.11/lib/python/site-packages/certifi/cacert.pem"' >> ~/.zshrc
+```
+
+**3. 每次重裝到模擬器都要重新登入 Spotify**
+
+`simctl install` 覆蓋安裝時，iOS 會把它當成重新安裝，連帶清掉 App 的
+Keychain 項目，refresh token 就沒了。UserDefaults（書庫、對齊偏移）不受影響。
+實機用 iloader 覆蓋安裝不會這樣，所以只有模擬器要忍這個。
 
 ---
 

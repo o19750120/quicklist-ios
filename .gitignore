@@ -12,3 +12,4 @@ payload_stage/
 .DS_Store
 xcuserdata/
 *.xcuserstate
+dist/

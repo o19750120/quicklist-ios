@@ -6,6 +6,10 @@
 
 包含：App 回報的執行紀錄、轉錄任務、逐字稿存量、CI 最近狀態，
 以及免費憑證還剩幾天（用該裝置第一筆啟動紀錄推算）。
+
+只用專案層級的 service key（.env.local 裡的 SUPABASE_SERVICE_KEY），
+不需要帳號層級的管理權杖 —— 那把能碰帳號底下所有專案，
+不該為了看個狀態就散佈到每一台開發機器上。
 """
 
 from __future__ import annotations
@@ -19,7 +23,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import db  # noqa: E402
+import env  # noqa: E402
+from supabase_client import Supabase  # noqa: E402
 
 FREE_CERT_DAYS = 7
 
@@ -28,15 +33,18 @@ def section(title: str) -> None:
     print(f"\n{'─' * 66}\n{title}\n{'─' * 66}")
 
 
-def relative(iso: str) -> str:
+def parse_time(iso: str) -> datetime:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+
+def relative(iso: str | None) -> str:
     if not iso:
         return ""
     try:
-        moment = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        moment = parse_time(iso)
     except ValueError:
         return iso[:19]
-    delta = datetime.now(timezone.utc) - moment
-    seconds = int(delta.total_seconds())
+    seconds = int((datetime.now(timezone.utc) - moment).total_seconds())
     if seconds < 60:
         return f"{seconds} 秒前"
     if seconds < 3600:
@@ -46,79 +54,91 @@ def relative(iso: str) -> str:
     return f"{seconds // 86400} 天前"
 
 
-def show_jobs() -> None:
+def show_jobs(db: Supabase) -> None:
     section("轉錄任務")
-    rows = db.run_sql("""
-        select show_name, episode_title, status, stage, error, created_at
-          from public.kikitori_jobs
-         order by created_at desc limit 8
-    """)
+    rows = db.select(
+        "kikitori_jobs",
+        "select=show_name,episode_title,status,stage,error,created_at"
+        "&order=created_at.desc&limit=8",
+    )
     if not rows:
         print("  （沒有任務）")
         return
     for r in rows:
         mark = {"done": "✓", "failed": "✗", "running": "…", "queued": "·"}.get(r["status"], "?")
-        print(f"  {mark} {r['status']:<8} {relative(r['created_at']):<10} "
-              f"{r['show_name'][:16]:<18} {r['episode_title'][:30]}")
-        if r["error"]:
+        stage = f" / {r['stage']}" if r.get("stage") else ""
+        print(f"  {mark} {r['status']:<8}{stage:<14} {relative(r['created_at']):<10} "
+              f"{r['show_name'][:16]:<18} {r['episode_title'][:28]}")
+        if r.get("error"):
             print(f"      錯誤：{r['error'][:100]}")
 
 
-def show_transcripts() -> None:
+def show_transcripts(db: Supabase) -> None:
     section("已完成的逐字稿")
-    rows = db.run_sql("""
-        select e.show_name, e.episode_title, t.line_count, t.source_model, t.created_at
-          from public.kikitori_episodes e
-          join public.kikitori_transcripts t on t.episode_id = e.id
-         order by t.created_at desc limit 10
-    """)
+    rows = db.select(
+        "kikitori_transcripts",
+        "select=line_count,source_model,created_at,"
+        "kikitori_episodes(show_name,episode_title)"
+        "&order=created_at.desc&limit=10",
+    )
     if not rows:
         print("  （還沒有）")
         return
     for r in rows:
-        print(f"  {r['line_count']:>4} 句  {relative(r['created_at']):<10} "
-              f"{r['show_name'][:16]:<18} {r['episode_title'][:32]}")
+        episode = r.get("kikitori_episodes") or {}
+        if isinstance(episode, list):
+            episode = episode[0] if episode else {}
+        print(f"  {r.get('line_count') or 0:>4} 句  {relative(r['created_at']):<10} "
+              f"{(episode.get('show_name') or '')[:16]:<18} "
+              f"{(episode.get('episode_title') or '')[:30]}")
 
 
-def show_logs(limit: int, errors_only: bool) -> None:
+def show_logs(db: Supabase, limit: int, errors_only: bool) -> None:
     section("App 回報的紀錄" + ("（只看錯誤）" if errors_only else ""))
-    where = "where level = 'error'" if errors_only else ""
-    rows = db.run_sql(f"""
-        select level, category, message, app_version, created_at,
-               left(device_id, 8) as device
-          from public.kikitori_logs
-          {where}
-         order by created_at desc limit {limit}
-    """)
+    query = f"select=level,category,message,created_at&order=created_at.desc&limit={limit}"
+    if errors_only:
+        query += "&level=eq.error"
+    rows = db.select("kikitori_logs", query)
     if not rows:
-        print("  （還沒收到，App 要更新到有遙測的版本才會回報）")
+        print("  （還沒收到）")
         return
     for r in rows:
         mark = {"error": "✗", "warn": "!", "info": "·"}.get(r["level"], "·")
-        print(f"  {mark} {relative(r['created_at']):<10} [{r['category'] or '-'}] {r['message'][:70]}")
+        print(f"  {mark} {relative(r['created_at']):<10} "
+              f"[{r.get('category') or '-'}] {r['message'][:70]}")
 
 
-def show_certificate() -> None:
+def show_devices(db: Supabase) -> None:
     section("憑證與裝置")
-    rows = db.run_sql("""
-        select left(device_id, 8) as device,
-               max(app_version) as version,
-               min(created_at) as first_seen,
-               max(created_at) as last_seen,
-               count(*) as events
-          from public.kikitori_logs
-         group by device_id
-         order by max(created_at) desc limit 4
-    """)
+    rows = db.select(
+        "kikitori_logs",
+        "select=device_id,app_version,created_at&order=created_at.desc&limit=1000",
+    )
     if not rows:
         print("  （還沒有裝置回報過）")
         return
+
+    # 由新到舊掃過一遍：第一次遇到的是最後活動，最後留下的是最早那筆
+    first_seen: dict[str, str] = {}
+    last_seen: dict[str, str] = {}
+    version: dict[str, str] = {}
+    events: dict[str, int] = {}
+
     for r in rows:
-        first = datetime.fromisoformat(r["first_seen"].replace("Z", "+00:00"))
-        days_left = FREE_CERT_DAYS - (datetime.now(timezone.utc) - first).days
+        device = r["device_id"]
+        if device not in last_seen:
+            last_seen[device] = r["created_at"]
+            version[device] = r.get("app_version") or "?"
+        first_seen[device] = r["created_at"]
+        events[device] = events.get(device, 0) + 1
+
+    now = datetime.now(timezone.utc)
+    for device in sorted(last_seen, key=lambda d: last_seen[d], reverse=True)[:4]:
+        days_left = FREE_CERT_DAYS - (now - parse_time(first_seen[device])).days
         warning = "  ← 快到期了，記得重新匯入" if days_left <= 2 else ""
-        print(f"  裝置 {r['device']}  版本 {r['version']}  事件 {r['events']} 筆")
-        print(f"    首次啟動 {relative(r['first_seen'])}，最後活動 {relative(r['last_seen'])}")
+        print(f"  裝置 {device[:8]}  版本 {version[device]}  事件 {events[device]} 筆")
+        print(f"    首次啟動 {relative(first_seen[device])}，"
+              f"最後活動 {relative(last_seen[device])}")
         print(f"    憑證推估還剩 {max(0, days_left)} 天{warning}")
 
 
@@ -147,10 +167,13 @@ def main() -> int:
     parser.add_argument("--errors", action="store_true")
     args = parser.parse_args()
 
-    show_jobs()
-    show_transcripts()
-    show_logs(args.logs, args.errors)
-    show_certificate()
+    env.require("SUPABASE_URL", "SUPABASE_SERVICE_KEY")
+    db = Supabase()
+
+    show_jobs(db)
+    show_transcripts(db)
+    show_logs(db, args.logs, args.errors)
+    show_devices(db)
     show_ci()
     print()
     return 0

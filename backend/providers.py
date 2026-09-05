@@ -23,7 +23,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import env
 from segment import Word
+
+# 本機直接跑時從 .env.local 補齊金鑰；CI 上由 GitHub Secrets 提供。
+env.load()
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Kikitori/0.1"
 

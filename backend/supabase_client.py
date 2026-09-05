@@ -7,8 +7,18 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+import env  # noqa: E402
+
+# 本機直接跑時從 .env.local 補齊設定；
+# CI 上沒有這個檔案，值由 GitHub Secrets 提供，load() 會是空操作。
+env.load()
 
 
 class Supabase:

@@ -29,8 +29,10 @@ final class NowPlayingModel: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
 
-    private let pollInterval: UInt64 = 5_000_000_000   // 5 秒
-    private let tickInterval: UInt64 = 200_000_000     // 0.2 秒
+    // 3 秒對一次是 20 次／分鐘，離 Spotify 的限流還很遠，
+    // 但在 Spotify 那頭拖動進度條時，這裡跟上的速度明顯有感。
+    private let pollInterval: UInt64 = 3_000_000_000
+    private let tickInterval: UInt64 = 200_000_000
 
     init(auth: SpotifyAuth) {
         self.auth = auth
@@ -116,9 +118,46 @@ final class NowPlayingModel: ObservableObject {
         displayProgressMs = state.extrapolatedProgressMs()
     }
 
-    /// 使用者說「現在講的是第 X 句」，據此算出偏移量
+    /// 使用者說「現在講的是第 X 句」，據此算出偏移量並記起來
     func align(toLineStartMs lineStartMs: Int) {
         alignmentOffsetMs = lineStartMs - displayProgressMs
+        if let id = nowPlaying?.id {
+            AlignmentStore.save(alignmentOffsetMs, for: id)
+        }
+    }
+
+    /// 進到一集時決定要用哪個偏移。
+    ///
+    /// 優先用使用者校正過的；沒有的話，用 Spotify 與原始音檔的長度差推估
+    /// —— Spotify 版本多出來的時間幾乎都是開場廣告，這個猜測多半直接對上。
+    func applyAlignment(episodeID: String, transcript: Transcript?) {
+        if let saved = AlignmentStore.load(for: episodeID) {
+            alignmentOffsetMs = saved
+            logInfo("對齊", String(format: "沿用上次校正 %+.1f 秒", Double(saved) / 1000))
+            return
+        }
+
+        guard let transcript,
+              let playing = nowPlaying,
+              let guess = Self.guessOffsetMs(
+                  spotifyDurationMs: playing.durationMs,
+                  sourceDurationMs: transcript.sourceDurationMs
+              ) else {
+            alignmentOffsetMs = 0
+            return
+        }
+
+        alignmentOffsetMs = guess
+        logInfo("對齊", String(format: "自動推估偏移 %+.1f 秒（Spotify 版本較長）", Double(guess) / 1000))
+    }
+
+    /// Spotify 比原始音檔長多少，就往前推多少。
+    /// 差太小（可能只是編碼誤差）或差太大（可能根本抓錯集數）都不套用。
+    static func guessOffsetMs(spotifyDurationMs: Int, sourceDurationMs: Int) -> Int? {
+        guard spotifyDurationMs > 0, sourceDurationMs > 0 else { return nil }
+        let diff = spotifyDurationMs - sourceDurationMs
+        guard diff > 5_000, diff < 600_000 else { return nil }
+        return -diff
     }
 
     /// 讓 Spotify 跳到指定位置（逐句重聽）
@@ -141,5 +180,8 @@ final class NowPlayingModel: ObservableObject {
 
     func resetAlignment() {
         alignmentOffsetMs = 0
+        if let id = nowPlaying?.id {
+            AlignmentStore.remove(for: id)
+        }
     }
 }

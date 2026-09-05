@@ -13,3 +13,6 @@ payload_stage/
 xcuserdata/
 *.xcuserstate
 dist/
+
+# 本機開發設定與產生的專案檔
+.env.local

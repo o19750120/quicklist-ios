@@ -75,6 +75,25 @@ def check_assets():
                 errors.append(f"{contents.relative_to(ROOT)}: 少了圖檔 {filename}")
 
 
+def check_no_leaked_secrets():
+    """本機開發會把金鑰填進 BuildSecrets.swift，那個檔案在版控裡，填了值不能提交。"""
+    path = ROOT / "Sources/Generated/BuildSecrets.swift"
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    filled = [
+        line.split("static let ")[1].split(" =")[0]
+        for line in text.splitlines()
+        if "static let " in line and '= ""' not in line
+    ]
+    if filled:
+        errors.append(
+            "BuildSecrets.swift 有填入的金鑰（"
+            + ", ".join(filled)
+            + "），提交前請執行 ./scripts/dev-secrets.sh clean"
+        )
+
+
 def check_swift():
     swift_files = list((ROOT / "Sources").rglob("*.swift"))
     if not swift_files:
@@ -96,7 +115,8 @@ def check_swift():
     notes.append(f"檢查了 {len(swift_files)} 個 Swift 檔")
 
 
-for check in (check_yaml, check_project_paths, check_plist, check_assets, check_swift):
+for check in (check_yaml, check_project_paths, check_plist, check_assets,
+              check_no_leaked_secrets, check_swift):
     check()
 
 for note in notes:

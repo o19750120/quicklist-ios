@@ -18,6 +18,9 @@ struct Transcript: Equatable {
     let showName: String
     let episodeTitle: String
     let language: String
+    /// 原始音檔的長度。Spotify 版本通常比它長，多出來的是插進去的廣告，
+    /// 兩者相減就是時間軸偏移的合理猜測。
+    let sourceDurationMs: Int
     let lines: [TranscriptLine]
 
     var isEmpty: Bool { lines.isEmpty }

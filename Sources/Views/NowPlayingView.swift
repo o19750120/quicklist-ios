@@ -8,6 +8,7 @@ struct NowPlayingView: View {
 
     @State private var showSettings = false
     @State private var showDiagnostics = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
@@ -53,10 +54,20 @@ struct NowPlayingView: View {
         }
         .onChange(of: model.nowPlaying?.id) { newID in
             guard let newID, model.nowPlaying?.kind == .episode else { return }
-            Task { await transcriptModel.loadIfNeeded(episodeID: newID) }
+            Task {
+                await transcriptModel.loadIfNeeded(episodeID: newID)
+                // 逐字稿到手才知道原始音檔多長，才能推估偏移
+                model.applyAlignment(episodeID: newID, transcript: transcriptModel.transcript)
+            }
         }
         .onChange(of: model.displayProgressMs) { _ in
             transcriptModel.updatePosition(model.alignedProgressMs)
+        }
+        .onChange(of: scenePhase) { phase in
+            // 從 Spotify 切回來時立刻對一次時間，不必等下一輪輪詢
+            if phase == .active {
+                Task { await model.refresh() }
+            }
         }
     }
 

@@ -67,8 +67,10 @@ struct TranscriptView: View {
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(isCurrent ? Theme.surface : .clear)
+                // 動畫只掛在背景上。掛在整個 row 上的話，
+                // 長按選單的預覽會跟著高亮狀態一起重繪而閃爍。
+                .animation(.easeInOut(duration: 0.25), value: isCurrent)
         )
-        .animation(.easeInOut(duration: 0.25), value: isCurrent)
         .contentShape(Rectangle())
         .onTapGesture {
             Task { await seek(to: line) }
@@ -76,7 +78,7 @@ struct TranscriptView: View {
         .contextMenu {
             Button {
                 nowPlayingModel.align(toLineStartMs: line.startMs)
-                logInfo("對齊", "使用者指定第 \(line.id) 句，偏移 \(nowPlayingModel.alignmentOffsetMs) ms")
+                logInfo("對齊", "手動指定第 \(line.id + 1) 句，偏移 \(nowPlayingModel.alignmentOffsetMs) ms")
             } label: {
                 Label("現在講的是這句", systemImage: "scope")
             }
@@ -94,6 +96,24 @@ struct TranscriptView: View {
                     Label("複製翻譯", systemImage: "character.book.closed")
                 }
             }
+        } preview: {
+            // 給一個靜態預覽，選單開著時就不會被外面的狀態變化牽動
+            VStack(alignment: .leading, spacing: 8) {
+                Text(line.text)
+                    .font(.body)
+                    .foregroundStyle(Theme.textPrimary)
+                if let translation = line.translation {
+                    Text(translation)
+                        .font(.footnote)
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Text(line.startMs.asPlaybackTime)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(Theme.textSecondary.opacity(0.7))
+            }
+            .padding(18)
+            .frame(maxWidth: 340, alignment: .leading)
+            .background(Theme.surface)
         }
     }
 

@@ -57,7 +57,7 @@ struct SupabaseService {
 
     /// 用 Spotify 的 episode id 查逐字稿。沒有就回 nil（代表還沒轉錄過）。
     func fetchTranscript(spotifyEpisodeID: String) async throws -> Transcript? {
-        let select = "id,show_name,episode_title,language,kikitori_transcripts(lines,language)"
+        let select = "id,show_name,episode_title,language,duration_ms,kikitori_transcripts(lines,language)"
         let path = "kikitori_episodes?spotify_episode_id=eq.\(spotifyEpisodeID)&select=\(select)&limit=1"
         guard let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
             return nil
@@ -101,6 +101,7 @@ struct SupabaseService {
             showName: row["show_name"] as? String ?? "",
             episodeTitle: row["episode_title"] as? String ?? "",
             language: (transcript["language"] as? String) ?? (row["language"] as? String) ?? "ja",
+            sourceDurationMs: row["duration_ms"] as? Int ?? 0,
             lines: lines
         )
     }

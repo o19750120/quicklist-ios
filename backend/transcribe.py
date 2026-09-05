@@ -143,6 +143,15 @@ def main() -> int:
             })
 
     try:
+        # 先確認翻譯服務活著。沒有翻譯的逐字稿對學語言的人沒有用，
+        # 而且那種失敗是靜默的 —— 任務顯示成功、通知報完成，
+        # 要等使用者打開 App 才發現整份沒有中文。寧可現在就失敗。
+        mark("running", "檢查翻譯服務")
+        healthy, detail = providers.translation_health()
+        if not healthy:
+            raise RuntimeError(f"翻譯服務不可用：{detail}")
+        log(f"翻譯服務可用：{detail}")
+
         mark("running", "準備中")
         episode_row, lines, model = build(
             show_name, episode_title, duration_ms, args.language, args.translate_to,

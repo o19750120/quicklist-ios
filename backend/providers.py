@@ -33,8 +33,27 @@ USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Kikitori/0.1"
 
 DEEPGRAM_MODEL = "nova-2"
 WHISPER_MODEL = "whisper-large-v3"
-GEMINI_MODEL = "gemini-3.5-flash"
-GROQ_CHAT_MODEL = "llama-3.3-70b-versatile"
+# 不寫死模型名稱 —— 服務商一下架就會靜默失敗。
+# 實際上就發生過：llama-3.3-70b-versatile 被 Groq 下架，
+# 翻譯整條斷掉但錯誤被吞掉，逐字稿照樣產出，只是整份沒有翻譯。
+# 改成啟動時去問「你現在有哪些模型」，再從偏好清單挑第一個還在的。
+GEMINI_MODEL_PREFERENCE = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-flash-latest",
+    "gemini-2.5-flash",
+]
+GROQ_MODEL_PREFERENCE = [
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+    "qwen/qwen3.6-27b",
+    "openai/gpt-oss-20b",
+    "groq/compound",
+]
+
+_model_cache: dict[str, str | None] = {}
 
 TRANSLATE_BATCH = 40
 SEGMENT_SECONDS = 900
@@ -236,9 +255,57 @@ def _translate_prompt(batch: list[str], target: str) -> str:
     )
 
 
-def _gemini_batch(prompt: str, key: str) -> str:
+def _get(url: str, headers: dict, timeout: int = 30):
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **headers})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read())
+
+
+def _list_models(provider: str, key: str) -> set[str]:
+    if provider == "gemini":
+        payload = _get(
+            f"https://generativelanguage.googleapis.com/v1beta/models?key={key}&pageSize=200", {}
+        )
+        return {m["name"].replace("models/", "") for m in payload.get("models", [])
+                if "generateContent" in m.get("supportedGenerationMethods", [])}
+    payload = _get("https://api.groq.com/openai/v1/models", {"Authorization": f"Bearer {key}"})
+    return {m["id"] for m in payload.get("data", [])}
+
+
+def pick_model(provider: str, keys: list[str]) -> str | None:
+    """從偏好清單挑第一個服務商現在真的還有的模型。
+
+    每個行程只問一次就記住。問不到（金鑰全失效之類）就回 None，
+    讓呼叫端明確知道這條路不通，而不是拿一個不存在的模型去撞 404。
+    """
+    if provider in _model_cache:
+        return _model_cache[provider]
+
+    preference = GEMINI_MODEL_PREFERENCE if provider == "gemini" else GROQ_MODEL_PREFERENCE
+    chosen = None
+
+    for key in keys:
+        try:
+            available = _list_models(provider, key)
+        except Exception:
+            continue
+        chosen = next((m for m in preference if m in available), None)
+        if chosen is None and available:
+            # 偏好清單全落空，至少挑一個看起來是對話模型的，別直接放棄
+            fallback = sorted(m for m in available
+                              if not any(x in m for x in ("whisper", "tts", "embed", "guard")))
+            chosen = fallback[0] if fallback else None
+        if chosen:
+            log(f"{provider} 使用模型 {chosen}")
+            break
+
+    _model_cache[provider] = chosen
+    return chosen
+
+
+def _gemini_batch(prompt: str, key: str, model: str) -> str:
     payload = _post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={key}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
         json.dumps({
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
@@ -249,11 +316,11 @@ def _gemini_batch(prompt: str, key: str) -> str:
     return payload["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def _groq_batch(prompt: str, key: str) -> str:
+def _groq_batch(prompt: str, key: str, model: str) -> str:
     payload = _post(
         "https://api.groq.com/openai/v1/chat/completions",
         json.dumps({
-            "model": GROQ_CHAT_MODEL,
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
@@ -262,6 +329,31 @@ def _groq_batch(prompt: str, key: str) -> str:
         timeout=300,
     )
     return payload["choices"][0]["message"]["content"]
+
+
+def translation_health() -> tuple[bool, str]:
+    """轉錄開始前先確認翻譯真的能用。
+
+    寧可讓整個任務失敗，也不要產出一份沒有翻譯的逐字稿 ——
+    那種失敗是靜默的：CI 綠燈、通知報成功，但東西是壞的，
+    而且要等使用者打開 App 才會發現。
+    """
+    for provider, env_name in (("gemini", "GEMINI_API_KEYS"), ("groq", "GROQ_API_KEYS")):
+        keys = _keys(env_name)
+        if not keys:
+            continue
+        model = pick_model(provider, keys)
+        if not model:
+            continue
+        for key in keys:
+            try:
+                _batch = _gemini_batch if provider == "gemini" else _groq_batch
+                raw = _batch('回傳這個 JSON，不要加任何其他東西：{"ok":"1"}', key, model)
+                if "ok" in raw:
+                    return True, f"{provider} / {model}"
+            except Exception:
+                continue
+    return False, "沒有任何翻譯服務可用"
 
 
 def translate(lines: list[str], target: str = "繁體中文") -> list[str]:
@@ -273,6 +365,9 @@ def translate(lines: list[str], target: str = "繁體中文") -> list[str]:
         log("沒有翻譯用的金鑰，跳過翻譯")
         return ["" for _ in lines]
 
+    gemini_model = pick_model("gemini", gemini_keys) if gemini_keys else None
+    groq_model = pick_model("groq", groq_keys) if groq_keys else None
+
     output: list[str] = []
     gemini_cursor = 0
 
@@ -282,30 +377,40 @@ def translate(lines: list[str], target: str = "繁體中文") -> list[str]:
         log(f"翻譯 {start + 1}–{start + len(batch)} / {len(lines)}")
 
         raw = None
-        # 每把 Gemini 金鑰都試一輪，配額滿了就換下一把
-        for attempt in range(len(gemini_keys)):
-            key = gemini_keys[(gemini_cursor + attempt) % len(gemini_keys)]
-            try:
-                raw = _gemini_batch(prompt, key)
-                gemini_cursor = (gemini_cursor + attempt) % len(gemini_keys)
-                break
-            except urllib.error.HTTPError as exc:
-                if exc.code in (429, 403):
-                    continue
-                log(f"Gemini 錯誤 {exc.code}，換下一把")
-            except Exception:
-                continue
+        # 失敗原因一定要留下來。之前這裡把例外整個吞掉，
+        # 結果 Groq 下架模型後翻譯全斷，卻沒有任何人知道。
+        failures: list[str] = []
 
-        if raw is None and groq_keys:
-            for key in groq_keys:
+        if gemini_model:
+            for attempt in range(len(gemini_keys)):
+                key = gemini_keys[(gemini_cursor + attempt) % len(gemini_keys)]
                 try:
-                    raw = _groq_batch(prompt, key)
+                    raw = _gemini_batch(prompt, key, gemini_model)
+                    gemini_cursor = (gemini_cursor + attempt) % len(gemini_keys)
                     break
-                except Exception:
-                    continue
+                except urllib.error.HTTPError as exc:
+                    failures.append(f"gemini#{attempt + 1} HTTP {exc.code}")
+                except Exception as exc:
+                    failures.append(f"gemini#{attempt + 1} {type(exc).__name__}")
+        else:
+            failures.append("gemini 沒有可用模型")
+
+        if raw is None and groq_model:
+            for index, key in enumerate(groq_keys, 1):
+                try:
+                    raw = _groq_batch(prompt, key, groq_model)
+                    break
+                except urllib.error.HTTPError as exc:
+                    failures.append(f"groq#{index} HTTP {exc.code}")
+                except Exception as exc:
+                    failures.append(f"groq#{index} {type(exc).__name__}")
+        elif raw is None:
+            failures.append("groq 沒有可用模型")
 
         if raw is None:
-            log("這批翻譯全部失敗，留空")
+            # 只印前幾個，同一種錯誤重複幾十次沒有意義
+            unique = list(dict.fromkeys(failures))[:4]
+            log(f"這批翻譯全部失敗（{'；'.join(unique)}），留空")
             output.extend("" for _ in batch)
             continue
 

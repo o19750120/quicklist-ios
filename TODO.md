@@ -64,6 +64,9 @@
 - [x] 點進去可以純閱讀，不必正在播放也能看逐字稿（`ReaderView`），
       並停在上次聽到的那句
 - [x] 播放進度記錄（`LibraryStore`，存 UserDefaults，之後可考慮同步）
+- [x] 書庫點一集就叫 Spotify 播它，並從上次聽到的地方接下去，不必離開 App
+      （已聽完的那幾集從頭開始；長按才是純閱讀。
+      Spotify 完全沒有裝置時才退回用 URL scheme 把 Spotify 打開）
 
 ## 階段 4：語言學習功能
 

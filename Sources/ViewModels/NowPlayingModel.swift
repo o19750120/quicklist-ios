@@ -243,6 +243,28 @@ final class NowPlayingModel: ObservableObject {
         }
     }
 
+    /// 從書庫點一集：叫 Spotify 播它，並從上次聽到的地方接下去。
+    ///
+    /// 回傳有沒有成功。失敗多半是 Spotify 那頭完全沒有裝置（404），
+    /// 那種情況只能真的把 Spotify 打開一次，呼叫端會處理。
+    func play(entry: LibraryEntry) async -> Bool {
+        do {
+            // 快聽完的那幾集從頭開始，不然一進去就播到片尾
+            let resumeAt = entry.isFinished ? 0 : entry.lastPositionMs
+            try await api.play(episodeID: entry.episodeID, positionMs: resumeAt)
+            logInfo("Spotify", "從書庫播放：\(entry.episodeTitle)")
+
+            // 不等下一輪輪詢，立刻把畫面接上
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            await refresh()
+            return true
+        } catch {
+            statusMessage = error.localizedDescription
+            logError("Spotify", "從書庫播放失敗：\(error.localizedDescription)")
+            return false
+        }
+    }
+
     func resetAlignment() {
         alignmentOffsetMs = 0
         if let id = nowPlaying?.id {

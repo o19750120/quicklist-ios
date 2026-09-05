@@ -93,6 +93,41 @@ struct SpotifyAPI {
         }
     }
 
+    /// 叫 Spotify 播某一集，可以指定從哪裡開始。
+    ///
+    /// 書庫點一集就是走這裡 —— 使用者不必切去 Spotify 找那一集再切回來，
+    /// 而且能直接從上次聽到的地方續播。
+    func play(episodeID: String, positionMs: Int) async throws {
+        let token = try await auth.validAccessToken()
+
+        var request = URLRequest(url: URL(string: "https://api.spotify.com/v1/me/player/play")!)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "uris": ["spotify:episode:\(episodeID)"],
+            "position_ms": max(0, positionMs),
+        ])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.http(0, "沒有收到 HTTP 回應")
+        }
+
+        switch http.statusCode {
+        case 200, 202, 204:
+            return
+        case 403:
+            throw APIError.http(403, "控制播放需要 Spotify Premium")
+        case 404:
+            throw APIError.http(404, "Spotify 那頭沒有可用的裝置")
+        default:
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let error = json?["error"] as? [String: Any]
+            throw APIError.http(http.statusCode, error?["message"] as? String ?? "開始播放失敗")
+        }
+    }
+
     /// 把播放位置跳到指定毫秒。逐句重聽靠這個。
     /// 控制播放需要 Premium，免費帳號會收到 403。
     func seek(toMs positionMs: Int) async throws {

@@ -45,7 +45,9 @@ final class ScreenTour: XCTestCase {
 
         // 書櫃裡第一列就是最近聽的那一集。
         // 這裡一定要指名，用 boundBy: 0 會抓到工具列的「完成」把畫面關掉。
-        let firstEpisode = app.buttons.matching(identifier: "library.row").firstMatch
+        let firstEpisode = app.buttons
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'library.row.'"))
+            .firstMatch
         if firstEpisode.waitForExistence(timeout: 5) {
             firstEpisode.tap()
             // 逐字稿要跟 Supabase 拿，給它一點時間

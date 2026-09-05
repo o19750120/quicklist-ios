@@ -44,7 +44,7 @@ struct NowPlayingView: View {
             SettingsView(model: model).environmentObject(auth)
         }
         .sheet(isPresented: $showLibrary) {
-            LibraryView()
+            LibraryView(model: model)
         }
         .sheet(isPresented: $showDiagnostics) {
             DiagnosticsView(model: model, transcriptModel: transcriptModel)

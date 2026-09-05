@@ -5,9 +5,16 @@ import SwiftUI
 /// 這裡不需要 Spotify 正在播 —— 點進去就能純閱讀，
 /// 所以通勤時聽、回家後複習，是兩件可以分開的事。
 struct LibraryView: View {
+    @ObservedObject var model: NowPlayingModel
+
     @ObservedObject private var store = LibraryStore.shared
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @State private var confirmClear = false
+    /// 正在讀哪一集的逐字稿（長按選「只看逐字稿」才會有值）
+    @State private var readingEntry: LibraryEntry?
+    /// 正在叫 Spotify 播哪一集，用來在那一列顯示轉圈
+    @State private var startingEpisodeID: String?
 
     var body: some View {
         NavigationStack {
@@ -38,6 +45,14 @@ struct LibraryView: View {
                 }
             }
             .kikitoriBackground()
+            .navigationDestination(isPresented: Binding(
+                get: { readingEntry != nil },
+                set: { if !$0 { readingEntry = nil } }
+            )) {
+                if let readingEntry {
+                    ReaderView(entry: readingEntry)
+                }
+            }
             .confirmationDialog("清空書庫？", isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("清空", role: .destructive) { store.removeAll() }
                 Button("取消", role: .cancel) {}
@@ -65,13 +80,25 @@ struct LibraryView: View {
 
                         VStack(spacing: 8) {
                             ForEach(group.entries) { entry in
-                                NavigationLink {
-                                    ReaderView(entry: entry)
+                                Button {
+                                    Task { await start(entry) }
                                 } label: {
                                     row(entry)
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityIdentifier("library.row")
+                                .accessibilityIdentifier("library.row.\(entry.episodeID)")
+                                .contextMenu {
+                                    Button {
+                                        readingEntry = entry
+                                    } label: {
+                                        Label("只看逐字稿，不播放", systemImage: "text.alignleft")
+                                    }
+                                    Button(role: .destructive) {
+                                        store.remove(episodeID: entry.episodeID)
+                                    } label: {
+                                        Label("從書庫移除", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
                     }
@@ -117,18 +144,30 @@ struct LibraryView: View {
                 progressBar(entry)
             }
 
-            Image(systemName: "chevron.right")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(Theme.textSecondary.opacity(0.5))
+            if startingEpisodeID == entry.episodeID {
+                ProgressView().tint(Theme.textSecondary)
+            } else {
+                Image(systemName: entry.isFinished ? "arrow.counterclockwise" : "play.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.spotifyGreen)
+            }
         }
         .padding(12)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .contextMenu {
-            Button(role: .destructive) {
-                LibraryStore.shared.remove(episodeID: entry.episodeID)
-            } label: {
-                Label("從書庫移除", systemImage: "trash")
-            }
+    }
+
+    /// 點一集就讓 Spotify 播它，然後把書庫收起來回到正在播放的畫面。
+    ///
+    /// Spotify 那頭完全沒有裝置時 Web API 會回 404，那種情況沒有別的辦法，
+    /// 只能真的把 Spotify 打開一次 —— 但那是退路，不是預設路徑。
+    private func start(_ entry: LibraryEntry) async {
+        startingEpisodeID = entry.episodeID
+        defer { startingEpisodeID = nil }
+
+        if await model.play(entry: entry) {
+            dismiss()
+        } else if let url = URL(string: "spotify:episode:\(entry.episodeID)") {
+            openURL(url)
         }
     }
 
@@ -160,7 +199,7 @@ struct LibraryView: View {
             Text("書庫還是空的")
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(Theme.textPrimary)
-            Text("在 Spotify 播一集 podcast，聽過的就會自動收進這裡。")
+            Text("在 Spotify 播一集 podcast，聽過的就會自動收進這裡。\n之後點一下就能從上次聽到的地方接著播。")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)

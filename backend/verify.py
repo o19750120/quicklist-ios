@@ -166,24 +166,29 @@ def detect_hallucination(lines: list) -> list[str]:
     if len(lines) < 3:
         return problems
 
-    # 連續重複同一句
+    # 短句重複是正常的口語現象，不是幻覺 ——
+    # 對談節目裡「そうですね。」「はい。」「なるほど。」本來就會出現幾十次。
+    # 只有長句被整段複製才是模型在編。
+    MIN_LENGTH = 12
+
     longest_run, run_text, current = 1, "", 1
     for previous, line in zip(lines, lines[1:]):
-        if line.text.strip() == previous.text.strip() and len(line.text.strip()) > 1:
+        text = line.text.strip()
+        if text == previous.text.strip() and len(text) >= MIN_LENGTH:
             current += 1
             if current > longest_run:
-                longest_run, run_text = current, line.text.strip()
+                longest_run, run_text = current, text
         else:
             current = 1
 
     if longest_run >= 4:
         problems.append(f"同一句連續重複 {longest_run} 次：「{run_text[:24]}」")
 
-    # 整份裡某一句出現的比例過高
+    # 整份裡同一個長句反覆出現
     counts: dict[str, int] = {}
     for line in lines:
         key = line.text.strip()
-        if len(key) > 3:
+        if len(key) >= MIN_LENGTH:
             counts[key] = counts.get(key, 0) + 1
     if counts:
         text, count = max(counts.items(), key=lambda kv: kv[1])

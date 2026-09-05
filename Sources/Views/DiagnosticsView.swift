@@ -62,7 +62,7 @@ struct DiagnosticsView: View {
                     } else {
                         ForEach(log.entries) { entry in
                             VStack(alignment: .leading, spacing: 3) {
-                                HStack(spacing: 6) {
+                                HStack(spacing: Theme.Space.sm) {
                                     Text(entry.timeText)
                                         .font(.caption2.monospacedDigit())
                                         .foregroundStyle(Theme.textSecondary)

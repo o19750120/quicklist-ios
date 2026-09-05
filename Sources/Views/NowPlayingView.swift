@@ -14,22 +14,25 @@ struct NowPlayingView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
+            Group {
                 if let playing = model.nowPlaying {
-                    header(playing)
-
-                    Rectangle()
-                        .fill(Theme.surfaceRaised)
-                        .frame(height: 1)
-
-                    if playing.kind == .episode {
-                        TranscriptView(
-                            transcriptModel: transcriptModel,
-                            nowPlayingModel: model,
-                            episode: playing
-                        )
-                    } else {
-                        notAPodcast
+                    Group {
+                        if playing.kind == .episode {
+                            TranscriptView(
+                                transcriptModel: transcriptModel,
+                                nowPlayingModel: model,
+                                episode: playing
+                            )
+                        } else {
+                            notAPodcast
+                        }
+                    }
+                    // 資訊列浮在內容上方，逐字稿從它底下捲過去。
+                    // 用一條分隔線把畫面切成上下兩塊是比較舊的做法；
+                    // iOS 26 之後系統自己也是這種半透明浮層的層次。
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        header(playing)
+                            .background(.ultraThinMaterial)
                     }
                 } else {
                     idleState
@@ -147,8 +150,8 @@ struct NowPlayingView: View {
     // MARK: - 上方資訊列
 
     private func header(_ playing: NowPlaying) -> some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 14) {
+        VStack(spacing: Theme.Space.md) {
+            HStack(spacing: Theme.Space.lg) {
                 AsyncImage(url: playing.artworkURL) { phase in
                     if case .success(let image) = phase {
                         image.resizable().aspectRatio(contentMode: .fill)
@@ -157,7 +160,7 @@ struct NowPlayingView: View {
                     }
                 }
                 .frame(width: 56, height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(playing.title)
@@ -165,7 +168,7 @@ struct NowPlayingView: View {
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(2)
 
-                    HStack(spacing: 5) {
+                    HStack(spacing: Theme.Space.xs) {
                         Circle()
                             .fill(statusColor(playing))
                             .frame(width: 6, height: 6)
@@ -185,7 +188,7 @@ struct NowPlayingView: View {
                 Spacer(minLength: 0)
             }
 
-            VStack(spacing: 6) {
+            VStack(spacing: Theme.Space.sm) {
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule().fill(Theme.surfaceRaised)
@@ -209,9 +212,9 @@ struct NowPlayingView: View {
                 .foregroundStyle(Theme.textSecondary)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 14)
+        .padding(.horizontal, Theme.Space.xl)
+        .padding(.top, Theme.Space.sm)
+        .padding(.bottom, Theme.Space.lg)
     }
 
     private var offsetLabel: String {
@@ -241,9 +244,9 @@ struct NowPlayingView: View {
     // MARK: - 其他狀態
 
     private var notAPodcast: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: Theme.Space.lg) {
             Image(systemName: "music.note")
-                .font(.system(size: 38))
+                .font(.system(size: Theme.heroIcon))
                 .foregroundStyle(Theme.textSecondary)
             Text("現在播的是歌曲")
                 .font(.subheadline.weight(.medium))
@@ -257,9 +260,9 @@ struct NowPlayingView: View {
     }
 
     private var idleState: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: Theme.Space.lg) {
             Image(systemName: idleIcon)
-                .font(.system(size: 48))
+                .font(.system(size: Theme.heroIcon))
                 .foregroundStyle(idleTint)
 
             Text(idleTitle)
@@ -270,7 +273,7 @@ struct NowPlayingView: View {
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
+                .padding(.horizontal, Theme.Space.xxl)
 
             idleActions
         }
@@ -282,15 +285,15 @@ struct NowPlayingView: View {
     @ViewBuilder
     private var idleActions: some View {
         if case .nothingPlaying = model.idleState {
-            VStack(spacing: 12) {
+            VStack(spacing: Theme.Space.md) {
                 Button {
                     Task { await model.resumePlayback() }
                 } label: {
                     Label("接著播", systemImage: "play.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.black)
-                        .padding(.horizontal, 26)
-                        .padding(.vertical, 12)
+                        .padding(.horizontal, Theme.Space.xl)
+                        .padding(.vertical, Theme.Space.md)
                         .background(Theme.spotifyGreen, in: Capsule())
                 }
 
@@ -308,8 +311,8 @@ struct NowPlayingView: View {
             } label: {
                 Text("重新整理")
                     .font(.subheadline.weight(.medium))
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, Theme.Space.xl)
+                    .padding(.vertical, Theme.Space.md)
                     .background(Theme.surfaceRaised, in: Capsule())
             }
             .tint(Theme.textPrimary)

@@ -14,7 +14,7 @@ struct SettingsView: View {
                             .foregroundStyle(auth.isAuthorized ? Theme.spotifyGreen : Theme.textSecondary)
                     }
 
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: Theme.Space.sm) {
                         Text("Client ID")
                             .font(.caption)
                             .foregroundStyle(Theme.textSecondary)

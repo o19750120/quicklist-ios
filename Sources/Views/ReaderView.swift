@@ -64,10 +64,10 @@ struct ReaderView: View {
     private func lineList(_ transcript: Transcript) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: Theme.Space.lg) {
                     heading
 
-                    LazyVStack(alignment: .leading, spacing: 4) {
+                    LazyVStack(alignment: .leading, spacing: Theme.Space.xs) {
                         ForEach(transcript.lines) { line in
                             lineRow(line, isBookmark: line.id == bookmarkIndex(in: transcript))
                                 .id(line.id)
@@ -75,8 +75,8 @@ struct ReaderView: View {
                     }
                     Color.clear.frame(height: 60)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
+                .padding(.horizontal, Theme.Space.xl)
+                .padding(.top, Theme.Space.sm)
             }
             .task(id: transcript.episodeUUID) {
                 // 進來就停在上次聽到的地方，像書籤一樣。
@@ -90,12 +90,12 @@ struct ReaderView: View {
     }
 
     private var heading: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
             Text(entry.episodeTitle)
                 .font(.headline)
                 .foregroundStyle(Theme.textPrimary)
 
-            HStack(spacing: 6) {
+            HStack(spacing: Theme.Space.sm) {
                 Text("\(entry.lineCount) 句")
                 Text("·")
                 Text(entry.isFinished
@@ -106,7 +106,7 @@ struct ReaderView: View {
             .foregroundStyle(Theme.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, 4)
+        .padding(.bottom, Theme.Space.xs)
     }
 
     /// 上次聽到的位置對應到哪一句。
@@ -124,14 +124,14 @@ struct ReaderView: View {
     }
 
     private func lineRow(_ line: TranscriptLine, isBookmark: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
                 Text(line.startMs.asPlaybackTime)
                     .font(.caption2.monospacedDigit())
-                    .foregroundStyle(Theme.textSecondary.opacity(0.6))
+                    .foregroundStyle(Theme.textSecondary)
                     .frame(width: 44, alignment: .leading)
 
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text(line.text)
                         .font(.body)
                         .foregroundStyle(Theme.textPrimary)
@@ -145,10 +145,10 @@ struct ReaderView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
+        .padding(.vertical, Theme.Space.md)
+        .padding(.horizontal, Theme.Space.md)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                 .fill(isBookmark ? Theme.surface : .clear)
         )
         .overlay(alignment: .leading) {
@@ -156,7 +156,7 @@ struct ReaderView: View {
                 Capsule()
                     .fill(Theme.accent)
                     .frame(width: 3)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, Theme.Space.sm)
             }
         }
         .contextMenu {
@@ -178,7 +178,7 @@ struct ReaderView: View {
     // MARK: - 沒東西可看的時候
 
     private var placeholder: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: Theme.Space.lg) {
             if isLoading {
                 ProgressView().tint(Theme.textSecondary)
                 Text("載入逐字稿…")
@@ -186,7 +186,7 @@ struct ReaderView: View {
                     .foregroundStyle(Theme.textSecondary)
             } else {
                 Image(systemName: "text.viewfinder")
-                    .font(.system(size: 38))
+                    .font(.system(size: Theme.heroIcon))
                     .foregroundStyle(Theme.textSecondary)
                 Text("這一集還沒有逐字稿")
                     .font(.subheadline.weight(.medium))
@@ -204,7 +204,7 @@ struct ReaderView: View {
                     .multilineTextAlignment(.center)
             }
         }
-        .padding(.horizontal, 32)
+        .padding(.horizontal, Theme.Space.xxl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

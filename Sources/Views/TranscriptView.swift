@@ -25,15 +25,15 @@ struct TranscriptView: View {
     private var lineList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
+                LazyVStack(alignment: .leading, spacing: Theme.Space.xs) {
                     ForEach(transcriptModel.transcript?.lines ?? []) { line in
                         lineRow(line)
                             .id(line.id)
                     }
                     Color.clear.frame(height: 120)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
+                .padding(.horizontal, Theme.Space.xl)
+                .padding(.top, Theme.Space.sm)
             }
             .simultaneousGesture(
                 DragGesture().onChanged { _ in pauseAutoFollow() }
@@ -50,7 +50,7 @@ struct TranscriptView: View {
     private func lineRow(_ line: TranscriptLine) -> some View {
         let isCurrent = line.id == transcriptModel.currentLineIndex
 
-        return VStack(alignment: .leading, spacing: 5) {
+        return VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text(line.text)
                 .font(isCurrent ? .title3.weight(.semibold) : .body)
                 .foregroundStyle(isCurrent ? Theme.textPrimary : Theme.textSecondary)
@@ -58,14 +58,14 @@ struct TranscriptView: View {
             if transcriptModel.showTranslation, let translation = line.translation {
                 Text(translation)
                     .font(isCurrent ? .subheadline : .footnote)
-                    .foregroundStyle(isCurrent ? Theme.accent : Theme.textSecondary.opacity(0.7))
+                    .foregroundStyle(isCurrent ? Theme.accent : Theme.textSecondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 10)
-        .padding(.horizontal, 14)
+        .padding(.vertical, Theme.Space.md)
+        .padding(.horizontal, Theme.Space.lg)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                 .fill(isCurrent ? Theme.surface : .clear)
                 // 動畫只掛在背景上。掛在整個 row 上的話，
                 // 長按選單的預覽會跟著高亮狀態一起重繪而閃爍。
@@ -99,7 +99,7 @@ struct TranscriptView: View {
             }
         } preview: {
             // 給一個靜態預覽，選單開著時就不會被外面的狀態變化牽動
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Theme.Space.sm) {
                 Text(line.text)
                     .font(.body)
                     .foregroundStyle(Theme.textPrimary)
@@ -110,9 +110,9 @@ struct TranscriptView: View {
                 }
                 Text(line.startMs.asPlaybackTime)
                     .font(.caption2.monospacedDigit())
-                    .foregroundStyle(Theme.textSecondary.opacity(0.7))
+                    .foregroundStyle(Theme.textSecondary)
             }
-            .padding(18)
+            .padding(Theme.Space.lg)
             .frame(maxWidth: 340, alignment: .leading)
             .background(Theme.surface)
         }
@@ -137,7 +137,7 @@ struct TranscriptView: View {
     // MARK: - 還沒有逐字稿
 
     private var emptyState: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: Theme.Space.lg) {
             if transcriptModel.isLoading {
                 ProgressView()
                     .tint(Theme.textSecondary)
@@ -163,7 +163,7 @@ struct TranscriptView: View {
 
             } else if let job = transcriptModel.job, job.status == .failed {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 34))
+                    .font(.system(size: Theme.heroIcon))
                     .foregroundStyle(Theme.accent)
                 Text("轉錄失敗")
                     .font(.subheadline.weight(.medium))
@@ -179,7 +179,7 @@ struct TranscriptView: View {
 
             } else {
                 Image(systemName: "text.viewfinder")
-                    .font(.system(size: 38))
+                    .font(.system(size: Theme.heroIcon))
                     .foregroundStyle(Theme.textSecondary)
                 Text("這一集還沒有逐字稿")
                     .font(.subheadline.weight(.medium))
@@ -198,8 +198,8 @@ struct TranscriptView: View {
                     .multilineTextAlignment(.center)
             }
         }
-        .padding(.horizontal, 32)
-        .padding(.vertical, 40)
+        .padding(.horizontal, Theme.Space.xxl)
+        .padding(.vertical, Theme.Space.xxl)
         // 要撐滿剩下的高度，否則上方的資訊列會被 VStack 垂直置中推到畫面中間
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -211,10 +211,10 @@ struct TranscriptView: View {
             Text(title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.black)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
+                .padding(.horizontal, Theme.Space.xl)
+                .padding(.vertical, Theme.Space.md)
                 .background(Theme.accent, in: Capsule())
         }
-        .padding(.top, 4)
+        .padding(.top, Theme.Space.xs)
     }
 }

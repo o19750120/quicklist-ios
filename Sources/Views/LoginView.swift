@@ -10,12 +10,12 @@ struct LoginView: View {
         VStack(spacing: 0) {
             Spacer()
 
-            VStack(spacing: 20) {
+            VStack(spacing: Theme.Space.xl) {
                 Image(systemName: "waveform.and.mic")
-                    .font(.system(size: 56))
+                    .font(.system(size: Theme.heroIcon))
                     .foregroundStyle(Theme.accent)
 
-                VStack(spacing: 8) {
+                VStack(spacing: Theme.Space.sm) {
                     Text("Kikitori")
                         .font(.largeTitle.weight(.bold))
                         .foregroundStyle(Theme.textPrimary)
@@ -27,7 +27,7 @@ struct LoginView: View {
 
             Spacer()
 
-            VStack(spacing: 16) {
+            VStack(spacing: Theme.Space.lg) {
                 if !auth.hasClientID || showClientIDField {
                     clientIDField
                 }
@@ -39,7 +39,7 @@ struct LoginView: View {
                         isWorking = false
                     }
                 } label: {
-                    HStack(spacing: 10) {
+                    HStack(spacing: Theme.Space.md) {
                         if isWorking {
                             ProgressView().tint(.black)
                         } else {
@@ -50,7 +50,7 @@ struct LoginView: View {
                     }
                     .foregroundStyle(.black)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
+                    .padding(.vertical, Theme.Space.lg)
                     .background(Theme.spotifyGreen, in: Capsule())
                 }
                 .disabled(isWorking || !auth.hasClientID)
@@ -61,7 +61,7 @@ struct LoginView: View {
                         .font(.footnote)
                         .foregroundStyle(Theme.accent)
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, Theme.Space.sm)
                 }
 
                 if auth.hasClientID && !showClientIDField {
@@ -76,17 +76,17 @@ struct LoginView: View {
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
                     .multilineTextAlignment(.center)
-                    .padding(.top, 4)
+                    .padding(.top, Theme.Space.xs)
             }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 48)
+            .padding(.horizontal, Theme.Space.xxl)
+            .padding(.bottom, Theme.Space.xxl)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .kikitoriBackground()
     }
 
     private var clientIDField: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
             Text("Spotify Client ID")
                 .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
@@ -97,8 +97,8 @@ struct LoginView: View {
                 .foregroundStyle(Theme.textPrimary)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
-                .padding(14)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+                .padding(Theme.Space.lg)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.md))
         }
     }
 }

@@ -66,10 +66,10 @@ struct LibraryView: View {
 
     private var shelf: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 26) {
+            LazyVStack(alignment: .leading, spacing: Theme.Space.xl) {
                 ForEach(store.groupedByShow, id: \.show) { group in
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: Theme.Space.md) {
+                        HStack(spacing: Theme.Space.sm) {
                             Text(group.show)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(Theme.textPrimary)
@@ -78,7 +78,7 @@ struct LibraryView: View {
                                 .foregroundStyle(Theme.textSecondary)
                         }
 
-                        VStack(spacing: 8) {
+                        VStack(spacing: Theme.Space.sm) {
                             ForEach(group.entries) { entry in
                                 Button {
                                     Task { await start(entry) }
@@ -104,13 +104,13 @@ struct LibraryView: View {
                     }
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+            .padding(.horizontal, Theme.Space.xl)
+            .padding(.vertical, Theme.Space.lg)
         }
     }
 
     private func row(_ entry: LibraryEntry) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Theme.Space.md) {
             AsyncImage(url: entry.artworkImageURL) { phase in
                 if case .success(let image) = phase {
                     image.resizable().aspectRatio(contentMode: .fill)
@@ -119,16 +119,16 @@ struct LibraryView: View {
                 }
             }
             .frame(width: 52, height: 52)
-            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: Theme.Space.sm) {
                 Text(entry.episodeTitle)
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
 
-                HStack(spacing: 6) {
+                HStack(spacing: Theme.Space.sm) {
                     if entry.hasTranscript {
                         Label("\(entry.lineCount) 句", systemImage: "text.alignleft")
                     } else {
@@ -138,7 +138,7 @@ struct LibraryView: View {
                     Text(progressLabel(entry))
                 }
                 .font(.caption2)
-                .foregroundStyle(entry.hasTranscript ? Theme.textSecondary : Theme.textSecondary.opacity(0.6))
+                .foregroundStyle(Theme.textSecondary)
                 .labelStyle(.titleAndIcon)
 
                 progressBar(entry)
@@ -152,8 +152,8 @@ struct LibraryView: View {
                     .foregroundStyle(Theme.spotifyGreen)
             }
         }
-        .padding(12)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(Theme.Space.md)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
     }
 
     /// 點一集就讓 Spotify 播它，然後把書庫收起來回到正在播放的畫面。
@@ -192,9 +192,9 @@ struct LibraryView: View {
     // MARK: - 空的時候
 
     private var emptyState: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: Theme.Space.lg) {
             Image(systemName: "books.vertical")
-                .font(.system(size: 42))
+                .font(.system(size: Theme.heroIcon))
                 .foregroundStyle(Theme.textSecondary)
             Text("書庫還是空的")
                 .font(.subheadline.weight(.medium))
@@ -204,7 +204,7 @@ struct LibraryView: View {
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
         }
-        .padding(.horizontal, 40)
+        .padding(.horizontal, Theme.Space.xxl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

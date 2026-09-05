@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import providers  # noqa: E402
 from find_episode import find_episode  # noqa: E402
 import verify  # noqa: E402
-from segment import resegment, stats  # noqa: E402
+from segment import refine_word_boundaries, resegment, stats  # noqa: E402
 from supabase_client import Supabase  # noqa: E402
 
 log = providers.log
@@ -63,6 +63,10 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
     words, model = providers.transcribe(episode.audio_url, language, audio_seconds)
 
     stage("斷句")
+    # 先用形態素解析找出日文真正的詞邊界。轉錄引擎給的「詞」不是語素 ——
+    # 同一段音檔可能切成「皆さん」或「皆」+「さん」——
+    # 直接拿它斷句會切出「どんな方」「法が」這種讀起來像亂碼的句子。
+    words = refine_word_boundaries(words)
     lines = resegment(words)
     summary = stats(lines)
     log(f"斷句完成：{summary['count']} 句，平均 {summary['avg_seconds']} 秒、"

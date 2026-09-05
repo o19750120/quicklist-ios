@@ -54,6 +54,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: 安裝相依套件
+        run: |
+          # 形態素解析器，用來找出日文真正的詞邊界，
+          # 斷句才不會切出「日」「本語」這種東西。
+          # 沒裝的話 segment.py 會安靜略過那一步 —— 也就是說
+          # 忘了裝不會報錯，只會讓優化在雲端默默失效（ffmpeg 就踩過這個坑）。
+          python -m pip install --quiet sudachipy sudachidict_core
+          python -c "from sudachipy import Dictionary; Dictionary(dict='core').create(); print('sudachipy 就緒')"
+
       - name: 安裝 ffmpeg
         run: |
           # runner 沒有預裝。缺了它有兩個後果，而且都是靜默的：

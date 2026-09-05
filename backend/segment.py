@@ -86,6 +86,110 @@ def join_words(words: list[Word]) -> str:
     return "".join(parts)
 
 
+_tokenizer = None
+
+
+def _get_tokenizer():
+    """形態素解析器。沒裝就回 None，讓呼叫端安靜略過這一步。"""
+    global _tokenizer
+    if _tokenizer is None:
+        try:
+            from sudachipy import Dictionary
+            _tokenizer = Dictionary(dict="core").create()
+        except Exception:
+            _tokenizer = False
+    return _tokenizer or None
+
+
+def refine_word_boundaries(words: list[Word]) -> list[Word]:
+    """用形態素解析重新切詞。
+
+    轉錄引擎給的「詞」不是語素邊界 —— 同一段音檔，Gemini 這次切成
+    「皆さん」、下次切成「皆」+「さん」，Deepgram 則會給出「日」「本語」。
+    拿這種邊界當斷句依據，就會切出「どんな方」「法が」這類讀起來像亂碼的句子。
+
+    這裡把文字接起來重新斷詞，時間戳按字元位置對應回去。
+    Sudachi 知道日文真正的詞邊界，所以之後的斷句只會切在合理的地方。
+
+    沒裝 sudachipy 就原樣回傳，不影響既有流程。
+    """
+    tokenizer = _get_tokenizer()
+    if not tokenizer or not words:
+        return words
+
+    # 每個字元對應到什麼時間。詞內用線性插值，夠準了 ——
+    # 反正接下來只拿它決定「切在哪」，不是拿來對嘴。
+    char_start: list[float] = []
+    char_end: list[float] = []
+    char_speaker: list[int | None] = []
+    pieces: list[str] = []
+
+    for word in words:
+        text = word.text
+        if not text:
+            continue
+        if pieces and _LATIN_END.search(pieces[-1]) and _LATIN_START.match(text):
+            pieces.append(" ")
+            char_start.append(word.start)
+            char_end.append(word.start)
+            char_speaker.append(word.speaker)
+        pieces.append(text)
+        span = max(word.end - word.start, 0.0)
+        count = len(text)
+        for index in range(count):
+            char_start.append(word.start + span * index / count)
+            char_end.append(word.start + span * (index + 1) / count)
+            char_speaker.append(word.speaker)
+
+    joined = "".join(pieces)
+    if len(joined) != len(char_start):
+        # 對不起來就別硬做，保持原樣比切壞好
+        return words
+
+    # Sudachi 一次最多吃 49149 bytes，日文一個字三個 byte，
+    # 所以切成一萬字一段，而且盡量切在標點後面免得拆散句子。
+    chunks: list[tuple[int, str]] = []
+    position = 0
+    limit = 10000
+    while position < len(joined):
+        stop = min(position + limit, len(joined))
+        if stop < len(joined):
+            for punctuation in SENTENCE_END + CLAUSE_BREAK:
+                found = joined.rfind(punctuation, position + limit // 2, stop)
+                if found > 0:
+                    stop = found + 1
+                    break
+        chunks.append((position, joined[position:stop]))
+        position = stop
+
+    refined: list[Word] = []
+    for base, chunk in chunks:
+        cursor = 0
+        for token in tokenizer.tokenize(chunk):
+            surface = token.surface()
+            if not surface:
+                continue
+            local = chunk.find(surface, cursor)
+            if local < 0:
+                continue
+            cursor = local + len(surface)
+            begin = base + local
+            finish = begin + len(surface)
+            if not surface.strip():
+                continue
+
+            # 說話者取這個語素涵蓋範圍內出現最多次的那位
+            speakers = [s for s in char_speaker[begin:finish] if s is not None]
+            refined.append(Word(
+                text=surface,
+                start=char_start[begin],
+                end=char_end[finish - 1],
+                speaker=max(set(speakers), key=speakers.count) if speakers else None,
+            ))
+
+    return refined or words
+
+
 def _flush(buffer: list[Word], lines: list[Line]) -> None:
     if not buffer:
         return

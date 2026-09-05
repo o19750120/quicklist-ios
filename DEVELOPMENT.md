@@ -155,12 +155,38 @@ python backend/transcribe.py --preview --show "節目名" --episode "集名"
 
 ## 兩台機器怎麼協作
 
-沒有什麼特別機制，就是 git。要注意的只有兩件事：
+底層還是 git，但兩台上的 Claude session 可以直接對話，
+所以協調不必透過你轉述。
 
-1. **換機器前先 push**，不然另一台 pull 不到
+**兩台的 Claude 互相傳訊息**
+
+兩邊都連上 Remote Control 之後，`/list-agents`（別名 `/peers`）
+就看得到對方，直接說「跟 @對方的名字 說 ⋯」即可。設定方式：
+
+```json
+// ~/.claude/settings.json（Windows 是 %USERPROFILE%\.claude\settings.json）
+{
+  "crossSessionInbound": "accept",
+  "remoteControlAtStartup": true
+}
+```
+
+`crossSessionInbound` 不設的話，bypass permissions 模式的 session
+會把收到的訊息扣住等人按核准，五分鐘沒回應就丟掉。
+用 `claude --name <名字>` 或 `/rename <名字>` 給 session 取個好記的名字。
+
+原生 Windows 需要 Claude Code 2.1.234 以上，macOS / WSL 是 2.1.224 以上。
+注意 **WSL 裡的 session 和原生 Windows 的 session 互相看不到**
+（註冊在不同的家目錄、用不同的 socket 型別）。
+
+**避免兩邊改到打架**
+
+1. **換機器前先 push**，開工前先 `git pull`
 2. **`.xcodeproj` 和 `.env.local` 都不進版控**，兩邊各自產生
-
-如果兩邊都改了同一個檔案造成衝突，`git status` 會告訴你是哪些。
+3. **預設分工**：Swift 在 Mac 做（有模擬器），`backend/` 與 CI 兩邊都可能動，
+   動共用檔案前先用 SendMessage 知會一聲
+4. **真的撞到**：後推的那台放棄自己的版本、pull 對方的，再把自己獨有的補回去。
+   同一個檔案的兩套改法不要硬 merge。
 
 ---
 

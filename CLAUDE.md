@@ -46,6 +46,20 @@ open Kikitori.xcodeproj
 `.xcodeproj` 不進版控，由 XcodeGen 從 `project.yml` 產生。
 新增 Swift 檔案不用手動加進專案，重跑 `xcodegen generate` 即可。
 
+## 兩台機器同時在改
+
+Mac 與 Windows 各有一個 Claude session，透過 SendMessage 直接對話
+（`/list-agents` 看得到對方）。兩邊都會改東西，所以：
+
+1. **開工前先 `git pull`**，收工 push 完用 SendMessage 告訴對方改了什麼
+2. **預設分工**：Swift（`Sources/`）在 Mac 做，那裡有模擬器可以當場驗證；
+   `backend/`、CI、腳本兩邊都可能動，**動之前先知會一聲**
+3. **撞在一起的話**：後推的那台放棄自己的版本、pull 對方的，
+   再把自己獨有的部分補回去。不要硬 merge 同一個檔案的兩套改法。
+
+（這條規則本身就是撞過一次才寫的：兩邊同時把 status.py 改成
+專案層級金鑰，做法還不一樣。）
+
 ## 一定要遵守的事
 
 1. **提交前執行 `./scripts/dev-secrets.sh clean`**

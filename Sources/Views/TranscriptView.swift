@@ -72,6 +72,7 @@ struct TranscriptView: View {
                 .animation(.easeInOut(duration: 0.25), value: isCurrent)
         )
         .contentShape(Rectangle())
+        .accessibilityIdentifier("transcript.line.\(line.id)")
         .onTapGesture {
             Task { await seek(to: line) }
         }

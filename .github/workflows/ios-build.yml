@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 30
 
     env:
-      APP_NAME: QuickList
+      APP_NAME: Kikitori
 
     steps:
       - name: Checkout
@@ -39,6 +39,23 @@ jobs:
           echo "::group::專案檔案"
           find . -path ./.git -prune -o -type f -print | sort
           echo "::endgroup::"
+
+      - name: 注入 Spotify Client ID
+        env:
+          CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+        run: |
+          TARGET=Sources/Generated/BuildSecrets.swift
+          if [ -z "$CLIENT_ID" ]; then
+            echo "沒有設定 SPOTIFY_CLIENT_ID，App 會要求在畫面上手動填入"
+          else
+            # 不要印出值本身，這個 repo 是公開的，Actions log 誰都看得到
+            sed -i '' "s|spotifyClientID = \"\"|spotifyClientID = \"${CLIENT_ID}\"|" "$TARGET"
+            if grep -q 'spotifyClientID = ""' "$TARGET"; then
+              echo "注入失敗，BuildSecrets 仍是空的"
+              exit 1
+            fi
+            echo "已注入 Client ID（長度 ${#CLIENT_ID}）"
+          fi
 
       - name: 安裝 XcodeGen
         run: |
@@ -114,7 +131,7 @@ jobs:
         with:
           name: build-output
           path: |
-            QuickList.ipa
+            Kikitori.ipa
             build.log
             xcodegen.log
           retention-days: 30
@@ -153,7 +170,7 @@ jobs:
           fi
 
           if [ "$STATUS" = "success" ]; then
-            TITLE="✅ QuickList $TAG 建置成功"
+            TITLE="✅ Kikitori $TAG 建置成功"
             COLOR=3066993
             DESC=$(printf '%s\n' \
               "iPad 用 Safari 打開下面連結，下載 .ipa 後選「用 SideStore 開啟」。" \
@@ -162,7 +179,7 @@ jobs:
               "**大小**: ${IPA_SIZE:-未知}" \
               "**commit**: ${COMMIT_MSG%%$'\n'*}")
           else
-            TITLE="❌ QuickList 建置失敗"
+            TITLE="❌ Kikitori 建置失敗"
             COLOR=15158332
             ERRORS=""
             if [ -f build.log ]; then
@@ -182,10 +199,10 @@ jobs:
 
           DESC=$(printf '%s' "$DESC" | cut -c1-3500)
           jq -n --arg t "$TITLE" --arg d "$DESC" --argjson c "$COLOR" \
-            '{username:"QuickList CI", embeds:[{title:$t, description:$d, color:$c}]}' > discord.json
+            '{username:"Kikitori CI", embeds:[{title:$t, description:$d, color:$c}]}' > discord.json
 
           curl -sS -f -X POST \
             -H "Content-Type: application/json" \
-            -H "User-Agent: Mozilla/5.0 (compatible; QuickListCI/1.0; +https://github.com/${{ github.repository }})" \
+            -H "User-Agent: Mozilla/5.0 (compatible; KikitoriCI/1.0; +https://github.com/${{ github.repository }})" \
             --data @discord.json \
             "$WEBHOOK" && echo "Discord 通知已送出"

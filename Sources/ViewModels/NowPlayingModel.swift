@@ -1,0 +1,101 @@
+import Foundation
+import SwiftUI
+
+/// 負責持續追蹤 Spotify 正在播什麼。
+///
+/// 兩個節奏分開跑：
+/// - 每 5 秒跟 Spotify 對一次答案（省 API 額度，也避免被限流）
+/// - 每 0.2 秒在本地把進度往前推（畫面上的秒數才會平順地走）
+@MainActor
+final class NowPlayingModel: ObservableObject {
+
+    @Published private(set) var nowPlaying: NowPlaying?
+    @Published private(set) var displayProgressMs: Int = 0
+    @Published private(set) var statusMessage: String?
+    @Published private(set) var isRunning = false
+
+    /// 使用者手動校正的偏移量（毫秒）。
+    /// Spotify 會在 podcast 插入動態廣告，導致它的進度跟原始音檔對不上，
+    /// 之後接上逐字稿時，使用者點「現在講的是這句」就會更新這個值。
+    @Published var alignmentOffsetMs: Int = 0
+
+    private let auth: SpotifyAuth
+    private var api: SpotifyAPI { SpotifyAPI(auth: auth) }
+
+    private var pollTask: Task<Void, Never>?
+    private var tickTask: Task<Void, Never>?
+
+    private let pollInterval: UInt64 = 5_000_000_000   // 5 秒
+    private let tickInterval: UInt64 = 200_000_000     // 0.2 秒
+
+    init(auth: SpotifyAuth) {
+        self.auth = auth
+    }
+
+    /// 對齊後的進度，之後餵給逐字稿用的就是這個值
+    var alignedProgressMs: Int {
+        max(0, displayProgressMs + alignmentOffsetMs)
+    }
+
+    func start() {
+        guard !isRunning else { return }
+        isRunning = true
+
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                try? await Task.sleep(nanoseconds: self?.pollInterval ?? 5_000_000_000)
+            }
+        }
+
+        tickTask = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.tick()
+                try? await Task.sleep(nanoseconds: self?.tickInterval ?? 200_000_000)
+            }
+        }
+    }
+
+    func stop() {
+        pollTask?.cancel()
+        tickTask?.cancel()
+        pollTask = nil
+        tickTask = nil
+        isRunning = false
+    }
+
+    func refresh() async {
+        do {
+            let state = try await api.fetchNowPlaying()
+            if let state {
+                // 換一集就把手動校正歸零，因為偏移量是綁在單集上的
+                if state.id != nowPlaying?.id {
+                    alignmentOffsetMs = 0
+                }
+                nowPlaying = state
+                displayProgressMs = state.progressMs
+                statusMessage = nil
+            } else {
+                nowPlaying = nil
+                statusMessage = "Spotify 現在沒有在播東西。去 Spotify 按播放，再回來這裡。"
+            }
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    /// 在兩次 API 之間，用本地時間把進度往前推
+    private func tick() {
+        guard let state = nowPlaying else { return }
+        displayProgressMs = state.extrapolatedProgressMs()
+    }
+
+    /// 使用者說「現在講的是第 X 句」，據此算出偏移量
+    func align(toLineStartMs lineStartMs: Int) {
+        alignmentOffsetMs = lineStartMs - displayProgressMs
+    }
+
+    func resetAlignment() {
+        alignmentOffsetMs = 0
+    }
+}

@@ -54,5 +54,8 @@ for entry in json.load(open(manifest)):
             print("  ✓ " + clean)
 PY
 
+# 測試會在模擬器上留一個 runner App，桌面看起來會很亂
+xcrun simctl uninstall booted com.o19750120.kikitori.uitests.xctrunner 2>/dev/null || true
+
 echo
 echo "截圖在 $OUT/"

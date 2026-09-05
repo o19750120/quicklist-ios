@@ -82,10 +82,12 @@
       憑證剩餘天數、CI 狀態
 - [x] 排隊改為即時觸發（Supabase 觸發器 → GitHub，實測 3 秒開工）
 - [ ] 每日健康檢查排程：憑證快到期、卡住的任務、SideStore 修好沒 → 推 Discord
-- [ ] Claude Code 這端掛 hook：push 後自動盯 CI，失敗自動抓 log
+- [x] Claude Code 這端掛 hook：push 後自動盯 CI，失敗把摘要寫進
+      `build/ci-last-failure.log` 並跳通知（`.claude/settings.json` + `scripts/ci-watch.sh`）
 
-- [ ] 換掉 App 圖示（現在還是最初測試用的打勾清單）
-- [ ] 排隊中的畫面要能看到進度階段（目前只有「排隊中」三個字）
+- [x] 換掉 App 圖示（波形，配色取自 Theme；`scripts/make-icon.py` 可重新產生）
+- [x] 排隊中的畫面看得到進度階段（尋找音檔 → 轉錄中 → 斷句 → 翻譯 N 句 →
+      寫入資料庫），App 輪詢也從 20 秒縮到 8 秒才跟得上
 - [x] 長按選單閃爍（contextMenu 沒有固定預覽，跟著高亮狀態重繪）
 - [x] 自動推估時間軸偏移（Spotify 與原始音檔的長度差），校正過的偏移會記住
 - [x] 輪詢 5 秒縮短為 3 秒，從背景切回來立刻同步

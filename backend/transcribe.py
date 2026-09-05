@@ -34,7 +34,14 @@ log = providers.log
 
 
 def build(show_name: str, episode_title: str, duration_ms: int | None,
-          language: str, translate_to: str) -> tuple[dict, list[dict], str]:
+          language: str, translate_to: str,
+          on_stage=None) -> tuple[dict, list[dict], str]:
+    # 每個階段都回報一次，App 那頭排隊畫面才看得到進度，不會只有「排隊中」三個字
+    def stage(text: str) -> None:
+        if on_stage:
+            on_stage(text)
+
+    stage("尋找音檔")
     match = find_episode(show_name, episode_title, duration_ms)
     if not match:
         raise RuntimeError(f"在公開 RSS 找不到這一集：{show_name} / {episode_title}")
@@ -42,8 +49,10 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
     show, episode = match
     log(f"對到 RSS：{show.name} / {episode.title}（相似度 {episode.match_score:.2f}）")
 
+    stage("轉錄中")
     words, model = providers.transcribe(episode.audio_url, language)
 
+    stage("斷句")
     lines = resegment(words)
     summary = stats(lines)
     log(f"斷句完成：{summary['count']} 句，平均 {summary['avg_seconds']} 秒、"
@@ -51,6 +60,7 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
 
     rows = [line.as_row() for line in lines]
 
+    stage(f"翻譯 {len(rows)} 句")
     translations = providers.translate([row["text"] for row in rows], translate_to)
     for row, translated in zip(rows, translations):
         row["translation"] = translated
@@ -133,9 +143,10 @@ def main() -> int:
             })
 
     try:
-        mark("running", "尋找音檔")
+        mark("running", "準備中")
         episode_row, lines, model = build(
-            show_name, episode_title, duration_ms, args.language, args.translate_to
+            show_name, episode_title, duration_ms, args.language, args.translate_to,
+            on_stage=lambda text: mark("running", text),
         )
 
         if args.preview:
@@ -147,6 +158,7 @@ def main() -> int:
                     print(f"           → {row['translation']}")
             return 0
 
+        mark("running", "寫入資料庫")
         episode_row["spotify_episode_id"] = spotify_id
         saved = supabase.upsert("kikitori_episodes", episode_row, "spotify_episode_id")
         episode_id = saved[0]["id"]

@@ -95,12 +95,15 @@ final class TranscriptModel: ObservableObject {
         }
     }
 
-    /// 排隊後每 20 秒看一次好了沒，好了就自動顯示。
+    /// 排隊後每 8 秒看一次好了沒，好了就自動顯示。
+    ///
+    /// 間隔要短於一個階段的長度，不然畫面上的「轉錄中」「翻譯 122 句」
+    /// 會整段跳過去，看起來像卡住。
     private func startPolling(episodeID: String) {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
-            for _ in 0..<90 {   // 最多盯 30 分鐘
-                try? await Task.sleep(nanoseconds: 20_000_000_000)
+            for _ in 0..<225 {   // 最多盯 30 分鐘
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
                 guard !Task.isCancelled, let self else { return }
 
                 await self.reload(episodeID: episodeID)

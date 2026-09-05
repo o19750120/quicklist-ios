@@ -52,6 +52,11 @@ final class TranscriptModel: ObservableObject {
                 transcript = nil
                 job = try await service.fetchJob(spotifyEpisodeID: episodeID)
                 logInfo("逐字稿", "這一集還沒有逐字稿（任務狀態：\(job?.status.label ?? "無")）")
+
+                // 進行中的任務要自動盯著，不然關掉 App 再打開就不會自己更新了
+                if let status = job?.status, status == .queued || status == .running {
+                    startPolling(episodeID: episodeID)
+                }
             }
         } catch {
             errorMessage = error.localizedDescription

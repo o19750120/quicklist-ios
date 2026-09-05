@@ -21,11 +21,12 @@ on:
         description: "只測試找不找得到音檔，不實際轉錄"
         type: boolean
         default: false
+  # App 排隊後，Supabase 觸發器會立刻打這個進來，不必等排程
   repository_dispatch:
     types: [transcribe]
   schedule:
-    # 定期撿排隊中的任務（GitHub 最短就是 5 分鐘，實際還會再延遲一點）
-    - cron: "*/5 * * * *"
+    # 兜底：萬一觸發器沒送到，排程會把漏掉的撿起來
+    - cron: "*/15 * * * *"
 
 permissions:
   contents: read
@@ -53,11 +54,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 確認工具鏈
+      - name: 環境資訊
         run: |
           python --version
           ffmpeg -version | head -1
-          ffprobe -version | head -1
+          echo "觸發方式：${{ github.event_name }}"
 
       - name: 手動指定的單集
         if: github.event_name == 'workflow_dispatch' && inputs.show != ''
@@ -71,11 +72,10 @@ jobs:
           fi
           python backend/transcribe.py "${ARGS[@]}"
 
-      - name: 外部觸發的單集
+      - name: 資料庫叫醒的單集
         if: github.event_name == 'repository_dispatch'
         run: |
-          python backend/transcribe.py \
-            --job "${{ github.event.client_payload.job_id }}"
+          python backend/transcribe.py --job "${{ github.event.client_payload.job_id }}"
 
       - name: 撿排隊中的任務
         if: github.event_name == 'schedule'
@@ -84,36 +84,7 @@ jobs:
             echo "沒有設定 Supabase，跳過"
             exit 0
           fi
-          python - <<'PYTHON'
-          import subprocess
-          import sys
-          from pathlib import Path
-
-          sys.path.insert(0, "backend")
-          from supabase_client import Supabase
-
-          supabase = Supabase()
-          jobs = supabase.select(
-              "kikitori_jobs",
-              "status=eq.queued&order=created_at.asc&limit=3",
-          )
-
-          if not jobs:
-              print("沒有排隊中的任務")
-              sys.exit(0)
-
-          print(f"撿到 {len(jobs)} 個任務")
-          failed = 0
-          for job in jobs:
-              print(f"--- 處理 {job['id']}：{job['show_name']} / {job['episode_title']}")
-              result = subprocess.run(
-                  [sys.executable, "backend/transcribe.py", "--job", job["id"]]
-              )
-              if result.returncode != 0:
-                  failed += 1
-
-          sys.exit(1 if failed == len(jobs) else 0)
-          PYTHON
+          python backend/run_queued.py
 
       - name: 通知 Discord
         if: always() && github.event_name != 'schedule'
@@ -127,19 +98,14 @@ jobs:
             exit 0
           fi
           if [ "$STATUS" = "success" ]; then
-            TITLE="✅ 逐字稿處理完成"
+            TITLE="✅ 逐字稿完成"
             COLOR=3066993
           else
-            TITLE="❌ 逐字稿處理失敗"
+            TITLE="❌ 逐字稿失敗"
             COLOR=15158332
           fi
-          DESC="節目：${{ inputs.show }}
-          集數：${{ inputs.episode }}
-          記錄：$RUN_URL"
-          jq -n --arg t "$TITLE" --arg d "$DESC" --argjson c "$COLOR" \
-            '{username:"Kikitori", embeds:[{title:$t, description:$d, color:$c}]}' > discord.json
-          curl -sS -X POST \
-            -H "Content-Type: application/json" \
-            -H "User-Agent: Mozilla/5.0 (compatible; KikitoriCI/1.0)" \
-            --data @discord.json "$WEBHOOK" \
-            && echo "已通知" || echo "通知失敗（不影響結果）"
+          # 節目資訊由 transcribe.py 寫進 GITHUB_ENV，
+          # 所以不論手動觸發還是資料庫叫醒，通知都有內容。
+          # 用 embed 的 fields 排版，就不必在 shell 裡拼多行字串。
+          jq -n --arg t "$TITLE" --argjson c "$COLOR" --arg show "${KIKITORI_SHOW:-（未記錄）}" --arg ep "${KIKITORI_EPISODE:-（未記錄）}" --arg result "${KIKITORI_RESULT:-}" --arg url "$RUN_URL" '{username:"Kikitori", embeds:[{title:$t, color:$c, fields:([{name:"節目",value:$show},{name:"集數",value:$ep}] + (if $result == "" then [] else [{name:"結果",value:$result}] end) + [{name:"記錄",value:$url}])}]}' > discord.json
+          curl -sS -X POST -H "Content-Type: application/json" -H "User-Agent: Mozilla/5.0 (compatible; KikitoriCI/1.0)" --data @discord.json "$WEBHOOK" && echo "已通知" || echo "通知失敗（不影響結果）"

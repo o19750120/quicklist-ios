@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -65,6 +66,17 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
     return episode_row, rows, model
 
 
+def export_env(**values) -> None:
+    """把處理中的節目資訊丟給 GitHub Actions，通知訊息才有東西可寫。"""
+    path = os.environ.get("GITHUB_ENV")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as handle:
+        for key, value in values.items():
+            flat = str(value).replace("\n", " ").replace("\r", " ")[:200]
+            handle.write(f"{key}={flat}\n")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--job", help="Supabase 裡的 job id")
@@ -100,6 +112,8 @@ def main() -> int:
         episode_title = args.episode
         spotify_id = args.spotify_id or f"manual:{show_name}:{episode_title}"
         duration_ms = args.duration_ms
+
+    export_env(KIKITORI_SHOW=show_name, KIKITORI_EPISODE=episode_title)
 
     if args.dry_run:
         match = find_episode(show_name, episode_title, duration_ms)
@@ -146,6 +160,7 @@ def main() -> int:
         }, "episode_id")
 
         mark("done", "完成")
+        export_env(KIKITORI_RESULT=f"{len(lines)} 句")
         log(f"已寫入 Supabase，episode_id={episode_id}，共 {len(lines)} 句")
         return 0
 

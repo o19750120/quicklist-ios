@@ -124,8 +124,14 @@ struct NowPlayingView: View {
 
                     HStack(spacing: 5) {
                         Circle()
-                            .fill(playing.isPlaying ? Theme.spotifyGreen : Theme.textSecondary)
+                            .fill(statusColor(playing))
                             .frame(width: 6, height: 6)
+                        Text(statusText(playing))
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary)
+                        Text("·")
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary.opacity(0.5))
                         Text(playing.subtitle)
                             .font(.caption)
                             .foregroundStyle(Theme.textSecondary)
@@ -167,6 +173,18 @@ struct NowPlayingView: View {
 
     private var offsetLabel: String {
         String(format: "校正 %+.1fs", Double(model.alignmentOffsetMs) / 1000)
+    }
+
+    /// Spotify 暫停久了會回報「沒有裝置在播」，那時畫面留在最後一集，
+    /// 不是錯誤，所以用不同的顏色與說法區分開。
+    private func statusColor(_ playing: NowPlaying) -> Color {
+        if playing.isPlaying { return Theme.spotifyGreen }
+        return model.isDisconnected ? Theme.textSecondary : Theme.accent
+    }
+
+    private func statusText(_ playing: NowPlaying) -> String {
+        if playing.isPlaying { return "播放中" }
+        return model.isDisconnected ? "Spotify 已閒置" : "已暫停"
     }
 
     private func progressFraction(_ playing: NowPlaying) -> Double {

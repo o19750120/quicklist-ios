@@ -14,6 +14,10 @@ final class NowPlayingModel: ObservableObject {
     @Published private(set) var statusMessage: String?
     @Published private(set) var isRunning = false
 
+    /// Spotify 回報沒有裝置在播，但我們還留著最後一集的畫面。
+    /// 暫停太久就會變成這樣，不代表出錯。
+    @Published private(set) var isDisconnected = false
+
     /// 使用者手動校正的偏移量（毫秒）。
     /// Spotify 會在 podcast 插入動態廣告，導致它的進度跟原始音檔對不上，
     /// 之後接上逐字稿時，使用者點「現在講的是這句」就會更新這個值。
@@ -67,6 +71,7 @@ final class NowPlayingModel: ObservableObject {
     func refresh() async {
         do {
             let state = try await api.fetchNowPlaying()
+
             if let state {
                 // 換一集就把手動校正歸零，因為偏移量是綁在單集上的
                 if state.id != nowPlaying?.id {
@@ -75,12 +80,29 @@ final class NowPlayingModel: ObservableObject {
                 nowPlaying = state
                 displayProgressMs = state.progressMs
                 statusMessage = nil
+                isDisconnected = false
+
+            } else if nowPlaying != nil {
+                // Spotify 暫停一陣子後會回報「沒有裝置在播」。
+                // 但學語言一定會暫停 —— 停下來查單字、重聽、抄筆記，
+                // 這時候把逐字稿收走等於廢掉這支 App。
+                // 所以保留最後一集的內容，只把進度停住。
+                isDisconnected = true
+                statusMessage = nil
+                if var last = nowPlaying {
+                    last.isPlaying = false
+                    last.progressMs = displayProgressMs
+                    last.fetchedAt = Date()
+                    nowPlaying = last
+                }
+
             } else {
-                nowPlaying = nil
+                // 從頭到尾都沒抓到過東西，才是真的沒在播
                 statusMessage = "Spotify 現在沒有在播東西。去 Spotify 按播放，再回來這裡。"
             }
         } catch {
             statusMessage = error.localizedDescription
+            logError("Spotify", error.localizedDescription)
         }
     }
 

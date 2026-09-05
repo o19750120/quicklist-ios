@@ -9,6 +9,7 @@ struct NowPlayingView: View {
     @State private var showSettings = false
     @State private var showDiagnostics = false
     @State private var showLibrary = false
+    @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -220,11 +221,14 @@ struct NowPlayingView: View {
     /// Spotify 暫停久了會回報「沒有裝置在播」，那時畫面留在最後一集，
     /// 不是錯誤，所以用不同的顏色與說法區分開。
     private func statusColor(_ playing: NowPlaying) -> Color {
+        if model.isOffline { return Theme.accent }
         if playing.isPlaying { return Theme.spotifyGreen }
         return model.isDisconnected ? Theme.textSecondary : Theme.accent
     }
 
     private func statusText(_ playing: NowPlaying) -> String {
+        // 離線時進度是停的，說「播放中」會騙人
+        if model.isOffline { return "離線，等網路回來" }
         if playing.isPlaying { return "播放中" }
         return model.isDisconnected ? "Spotify 已閒置" : "已暫停"
     }
@@ -254,16 +258,51 @@ struct NowPlayingView: View {
 
     private var idleState: some View {
         VStack(spacing: 16) {
-            Image(systemName: "waveform")
+            Image(systemName: idleIcon)
                 .font(.system(size: 48))
-                .foregroundStyle(Theme.textSecondary)
+                .foregroundStyle(idleTint)
 
-            Text(model.statusMessage ?? "正在跟 Spotify 對狀態…")
-                .font(.subheadline)
+            Text(idleTitle)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Theme.textPrimary)
+
+            Text(idleDetail)
+                .font(.caption)
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
 
+            idleActions
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 「打開 App 就接上」的關鍵：沒在播的時候，不必切去 Spotify 按播放，
+    /// 在這裡按一下就好。只有 Spotify 那頭完全沒有裝置時才需要真的切過去。
+    @ViewBuilder
+    private var idleActions: some View {
+        if case .nothingPlaying = model.idleState {
+            VStack(spacing: 12) {
+                Button {
+                    Task { await model.resumePlayback() }
+                } label: {
+                    Label("接著播", systemImage: "play.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 26)
+                        .padding(.vertical, 12)
+                        .background(Theme.spotifyGreen, in: Capsule())
+                }
+
+                Button("打開 Spotify") {
+                    if let url = URL(string: "spotify://") {
+                        openURL(url)
+                    }
+                }
+                .font(.caption)
+                .tint(Theme.textSecondary)
+            }
+        } else {
             Button {
                 Task { await model.refresh() }
             } label: {
@@ -275,6 +314,45 @@ struct NowPlayingView: View {
             }
             .tint(Theme.textPrimary)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // 三種「沒東西可看」要做的事完全不同，所以分開講
+
+    private var idleIcon: String {
+        switch model.idleState {
+        case .connecting:     return "waveform"
+        case .offline:        return "wifi.slash"
+        case .nothingPlaying: return "pause.circle"
+        case .failed:         return "exclamationmark.triangle"
+        }
+    }
+
+    private var idleTint: Color {
+        switch model.idleState {
+        case .connecting, .nothingPlaying: return Theme.textSecondary
+        case .offline, .failed:            return Theme.accent
+        }
+    }
+
+    private var idleTitle: String {
+        switch model.idleState {
+        case .connecting:     return "正在跟 Spotify 對狀態"
+        case .offline:        return "沒有網路"
+        case .nothingPlaying: return "Spotify 現在沒有在播"
+        case .failed:         return "連不上 Spotify"
+        }
+    }
+
+    private var idleDetail: String {
+        switch model.idleState {
+        case .connecting:
+            return "馬上就好。"
+        case .offline:
+            return "連上網路就會自己接回來，不用重開 App。\n書庫裡讀過的逐字稿不受影響。"
+        case .nothingPlaying:
+            return "去 Spotify 播一集 podcast，再回來這裡。\n或是打開書庫，讀之前聽過的那幾集。"
+        case .failed(let message):
+            return message
+        }
     }
 }

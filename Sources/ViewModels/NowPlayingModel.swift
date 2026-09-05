@@ -9,6 +9,20 @@ import SwiftUI
 @MainActor
 final class NowPlayingModel: ObservableObject {
 
+    /// 還沒有東西可顯示的時候，是哪一種「沒有」。
+    /// 這三件事使用者要做的處置完全不同，不該都丟同一句錯誤訊息。
+    enum IdleState: Equatable {
+        case connecting
+        case offline
+        case nothingPlaying
+        case failed(String)
+    }
+
+    @Published private(set) var idleState: IdleState = .connecting
+
+    /// 網路斷了。跟 `isDisconnected`（Spotify 沒有裝置在播）是兩回事。
+    @Published private(set) var isOffline = false
+
     @Published private(set) var nowPlaying: NowPlaying?
     @Published private(set) var displayProgressMs: Int = 0
     @Published private(set) var statusMessage: String?
@@ -74,11 +88,17 @@ final class NowPlayingModel: ObservableObject {
         do {
             let state = try await api.fetchNowPlaying()
 
+            if isOffline {
+                logInfo("Spotify", "網路回來了")
+            }
+            isOffline = false
+
             if let state {
                 // 換一集就把手動校正歸零，因為偏移量是綁在單集上的
                 if state.id != nowPlaying?.id {
                     alignmentOffsetMs = 0
                 }
+                idleState = .connecting
                 nowPlaying = state
                 displayProgressMs = state.progressMs
                 statusMessage = nil
@@ -104,11 +124,40 @@ final class NowPlayingModel: ObservableObject {
 
             } else {
                 // 從頭到尾都沒抓到過東西，才是真的沒在播
-                statusMessage = "Spotify 現在沒有在播東西。去 Spotify 按播放，再回來這裡。"
+                idleState = .nothingPlaying
+                statusMessage = nil
             }
         } catch {
-            statusMessage = error.localizedDescription
-            logError("Spotify", error.localizedDescription)
+            if Self.isOfflineError(error) {
+                // 網路斷掉時畫面保留最後一集 —— 跟暫停一樣，不該把逐字稿收走。
+                // 只在狀態轉換時記一次，不然每 3 秒就寫一筆。
+                if !isOffline {
+                    logInfo("Spotify", "連不上網路，畫面保留在最後一集")
+                }
+                isOffline = true
+                if nowPlaying == nil {
+                    idleState = .offline
+                }
+                statusMessage = nil
+            } else {
+                idleState = .failed(error.localizedDescription)
+                statusMessage = error.localizedDescription
+                logError("Spotify", error.localizedDescription)
+            }
+        }
+    }
+
+    /// 這個錯誤是「連不上網路」還是「Spotify 那頭有問題」。
+    /// 前者使用者要去開網路，後者才需要看錯誤訊息。
+    static func isOfflineError(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .notConnectedToInternet, .networkConnectionLost, .timedOut,
+             .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
+             .dataNotAllowed, .internationalRoamingOff:
+            return true
+        default:
+            return false
         }
     }
 
@@ -175,6 +224,22 @@ final class NowPlayingModel: ObservableObject {
         } catch {
             statusMessage = error.localizedDescription
             logError("Spotify", "跳轉失敗：\(error.localizedDescription)")
+        }
+    }
+
+    /// 讓 Spotify 接著播。成功的話下一輪輪詢就會把內容帶進來，
+    /// 使用者從頭到尾不用離開這個 App。
+    func resumePlayback() async {
+        do {
+            try await api.resumePlayback()
+            logInfo("Spotify", "從 App 這頭恢復播放")
+            // 不等下一輪，立刻對一次
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            await refresh()
+        } catch {
+            idleState = .failed(error.localizedDescription)
+            statusMessage = error.localizedDescription
+            logError("Spotify", "恢復播放失敗：\(error.localizedDescription)")
         }
     }
 

@@ -81,7 +81,8 @@
 - [x] `backend/status.py`：一次看完轉錄任務、逐字稿存量、App 紀錄、
       憑證剩餘天數、CI 狀態
 - [x] 排隊改為即時觸發（Supabase 觸發器 → GitHub，實測 3 秒開工）
-- [ ] 每日健康檢查排程：憑證快到期、卡住的任務、SideStore 修好沒 → 推 Discord
+- [x] 每日健康檢查排程：憑證快到期、卡住的任務、SideStore 修好沒 → 推 Discord
+      （`backend/healthcheck.py`，每天台北 9 點跑，沒事就安靜）
 - [x] Claude Code 這端掛 hook：push 後自動盯 CI，失敗把摘要寫進
       `build/ci-last-failure.log` 並跳通知（`.claude/settings.json` + `scripts/ci-watch.sh`）
 
@@ -92,9 +93,13 @@
 - [x] 自動推估時間軸偏移（Spotify 與原始音檔的長度差），校正過的偏移會記住
 - [x] 輪詢 5 秒縮短為 3 秒，從背景切回來立刻同步
 - [x] Mac 開發環境：setup-mac.sh 一鍵設定、DEVELOPMENT.md、金鑰外洩防呆
-- [ ] 打開 App 時自動喚起 Spotify（靈動歌詞那個體驗）
-- [ ] 沒網路、Spotify 沒在播、逐字稿還沒好等狀態的畫面
-- [ ] 減少匯入次數：能遠端更新的東西（逐字稿、字典）都走後端，不綁進 App
+- [x] 不必離開 App 就能接上 Spotify：沒在播時給「接著播」，
+      直接用 Web API 恢復播放；真的沒有裝置時才需要「打開 Spotify」
+      （iOS 不允許 App 一啟動就把使用者踢去別的 App，那也是壞體驗）
+- [x] 沒網路、Spotify 沒在播、逐字稿還沒好各有各的畫面與說法
+      （離線時保留最後一集，跟暫停一樣不把逐字稿收走）
+- [x] 減少匯入次數：逐字稿已經全走後端，App 只存「聽到哪」這種本機才有意義的東西。
+      階段 4 的字典也要照這個原則走後端，不要綁進 App。
 - [ ] 斷句還有零星瑕疵（Deepgram 把「日本語」拆成「日」「本語」時會跟著切錯），
       之後可讓 Gemini 依語意重新分句
 

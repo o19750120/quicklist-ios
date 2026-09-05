@@ -62,6 +62,37 @@ struct SpotifyAPI {
         }
     }
 
+    /// 讓 Spotify 接著播 —— 目的是讓使用者不必離開 Kikitori 切過去按播放。
+    ///
+    /// 只有在 Spotify 那頭還記得某台裝置時才有用；完全沒有裝置會拿到 404，
+    /// 那種情況只能真的把 Spotify 打開一次。
+    func resumePlayback() async throws {
+        let token = try await auth.validAccessToken()
+
+        var request = URLRequest(url: URL(string: "https://api.spotify.com/v1/me/player/play")!)
+        request.httpMethod = "PUT"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("0", forHTTPHeaderField: "Content-Length")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.http(0, "沒有收到 HTTP 回應")
+        }
+
+        switch http.statusCode {
+        case 200, 202, 204:
+            return
+        case 403:
+            throw APIError.http(403, "控制播放需要 Spotify Premium")
+        case 404:
+            throw APIError.http(404, "Spotify 那頭沒有可用的裝置")
+        default:
+            let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let error = json?["error"] as? [String: Any]
+            throw APIError.http(http.statusCode, error?["message"] as? String ?? "開始播放失敗")
+        }
+    }
+
     /// 把播放位置跳到指定毫秒。逐句重聽靠這個。
     /// 控制播放需要 Premium，免費帳號會收到 403。
     func seek(toMs positionMs: Int) async throws {

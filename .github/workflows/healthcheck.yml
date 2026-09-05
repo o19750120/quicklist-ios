@@ -1,0 +1,28 @@
+name: Daily health check
+
+# 每天問一次：憑證還剩幾天、有沒有任務卡住、SideStore 修好沒。
+# 有事才推 Discord —— 每天都收到「一切正常」等於沒人會看。
+
+on:
+  schedule:
+    # UTC 01:00 = 台北早上 9 點，起床就看得到
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 健康檢查
+        run: python backend/healthcheck.py --notify

@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build & Release
+    name: Build and Release
     runs-on: macos-15
     timeout-minutes: 30
 
@@ -27,19 +27,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show toolchain
+      - name: 環境資訊
         run: |
+          echo "::group::系統與工具鏈"
           sw_vers
           xcodebuild -version
+          swift --version || true
+          echo "可用的 Xcode:"
           ls /Applications | grep -i '^Xcode' || true
+          echo "::endgroup::"
+          echo "::group::專案檔案"
+          find . -path ./.git -prune -o -type f -print | sort
+          echo "::endgroup::"
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: 安裝 XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen --version
 
-      - name: Generate Xcode project
-        run: xcodegen generate --spec project.yml
+      - name: 產生 Xcode 專案
+        run: |
+          set -o pipefail
+          xcodegen generate --spec project.yml 2>&1 | tee xcodegen.log
+          echo "::group::產生出來的 target / scheme"
+          xcodebuild -list -project "${APP_NAME}.xcodeproj"
+          echo "::endgroup::"
 
-      - name: Build (no code signing)
+      - name: 編譯（不簽名）
+        id: build
         run: |
           set -o pipefail
           xcodebuild \
@@ -54,36 +69,123 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_ENTITLEMENTS="" \
-            build
+            build 2>&1 | tee build.log
 
-      - name: Package into .ipa
+      - name: 抽出編譯錯誤摘要
+        if: failure()
+        run: |
+          echo "::group::error / warning 摘要"
+          grep -nE "(error|warning):" build.log | head -60 || echo "build.log 中沒有 error/warning 字樣"
+          echo "::endgroup::"
+          echo "::group::build.log 最後 120 行"
+          tail -120 build.log || true
+          echo "::endgroup::"
+          {
+            echo "## 編譯失敗"
+            echo ''
+            echo '```'
+            grep -E "error:" build.log | head -20 || tail -40 build.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 打包成 .ipa
         run: |
           APP_PATH="build/Build/Products/Release-iphoneos/${APP_NAME}.app"
-          test -d "$APP_PATH" || { echo "找不到 .app: $APP_PATH"; ls -R build/Build/Products; exit 1; }
+          if [ ! -d "$APP_PATH" ]; then
+            echo "找不到 .app: $APP_PATH"
+            ls -R build/Build/Products || true
+            exit 1
+          fi
+          echo "::group::.app 內容"
+          ls -lR "$APP_PATH" | head -60
+          echo "::endgroup::"
           rm -rf payload_stage
           mkdir -p payload_stage/Payload
           cp -R "$APP_PATH" payload_stage/Payload/
-          # SideStore 不需要簽名檔，先清乾淨避免安裝時衝突
           rm -rf "payload_stage/Payload/${APP_NAME}.app/_CodeSignature"
           (cd payload_stage && zip -qry "../${APP_NAME}.ipa" Payload)
-          ls -lh "${APP_NAME}.ipa"
+          SIZE=$(ls -lh "${APP_NAME}.ipa" | awk '{print $5}')
+          echo "IPA_SIZE=$SIZE" >> "$GITHUB_ENV"
+          echo "打包完成：${APP_NAME}.ipa ($SIZE)"
 
-      - name: Upload build artifact
+      - name: 上傳建置產物
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.APP_NAME }}-ipa
-          path: ${{ env.APP_NAME }}.ipa
+          name: build-output
+          path: |
+            QuickList.ipa
+            build.log
+            xcodegen.log
           retention-days: 30
+          if-no-files-found: warn
 
-      - name: Publish GitHub Release
+      - name: 發佈 GitHub Release
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v1.0.${{ github.run_number }}"
-          gh release create "$TAG" "${APP_NAME}.ipa" \
-            --title "${APP_NAME} $TAG" \
-            --notes "自動建置（未簽名 IPA）
+          printf '%s\n' \
+            "自動建置的未簽名 IPA。" \
+            "" \
+            "- commit: ${{ github.sha }}" \
+            "- 大小: ${IPA_SIZE}" \
+            "" \
+            "在 iPad 用 Safari 下載下面的 .ipa，選「用 SideStore 開啟」即可安裝。" > notes.md
+          gh release create "$TAG" "${APP_NAME}.ipa" --title "${APP_NAME} $TAG" --notes-file notes.md
+          echo "url=https://github.com/${{ github.repository }}/releases/tag/$TAG" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-commit: ${{ github.sha }}
+      - name: 通知 Discord
+        if: always()
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASE_URL: ${{ steps.release.outputs.url }}
+          TAG: ${{ steps.release.outputs.tag }}
+          STATUS: ${{ job.status }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "沒有設定 DISCORD_WEBHOOK secret，跳過通知"
+            exit 0
+          fi
 
-在 iPad 用 Safari 下載下面的 .ipa，選「用 SideStore 開啟」即可安裝。"
+          if [ "$STATUS" = "success" ]; then
+            TITLE="✅ QuickList $TAG 建置成功"
+            COLOR=3066993
+            DESC=$(printf '%s\n' \
+              "iPad 用 Safari 打開下面連結，下載 .ipa 後選「用 SideStore 開啟」。" \
+              "" \
+              "**下載**: $RELEASE_URL" \
+              "**大小**: ${IPA_SIZE:-未知}" \
+              "**commit**: ${COMMIT_MSG%%$'\n'*}")
+          else
+            TITLE="❌ QuickList 建置失敗"
+            COLOR=15158332
+            ERRORS=""
+            if [ -f build.log ]; then
+              ERRORS=$(grep -E "error:" build.log | head -8 | cut -c1-220 || true)
+            fi
+            if [ -z "$ERRORS" ]; then
+              ERRORS="（build.log 沒有 error: 行，可能在編譯前的步驟就失敗了，請看完整記錄）"
+            fi
+            DESC=$(printf '%s\n' \
+              "**commit**: ${COMMIT_MSG%%$'\n'*}" \
+              "**完整記錄**: $RUN_URL" \
+              "" \
+              '```' \
+              "$ERRORS" \
+              '```')
+          fi
+
+          DESC=$(printf '%s' "$DESC" | cut -c1-3500)
+          jq -n --arg t "$TITLE" --arg d "$DESC" --argjson c "$COLOR" \
+            '{username:"QuickList CI", embeds:[{title:$t, description:$d, color:$c}]}' > discord.json
+
+          curl -sS -f -X POST \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: Mozilla/5.0 (compatible; QuickListCI/1.0; +https://github.com/${{ github.repository }})" \
+            --data @discord.json \
+            "$WEBHOOK" && echo "Discord 通知已送出"

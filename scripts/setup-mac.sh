@@ -3,12 +3,10 @@
 #
 #   ./scripts/setup-mac.sh
 #
-# 做四件事：裝 xcodegen、拉開發設定、注入金鑰、產生 .xcodeproj。
 # 重複執行是安全的。
 
 set -euo pipefail
 
-GIST_ID="086e4e5e018f156212cba1a53852f8c2"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
@@ -35,24 +33,25 @@ if ! command -v xcodegen >/dev/null 2>&1; then
 fi
 ok "xcodegen $(xcodegen --version 2>&1 | tail -1)"
 
-if ! command -v gh >/dev/null 2>&1; then
-    echo "  安裝 GitHub CLI…"
-    brew install gh
-fi
-
-if ! gh auth status >/dev/null 2>&1; then
-    warn "GitHub CLI 還沒登入，執行：gh auth login"
-    exit 1
-fi
-ok "gh 已登入"
-
-step "取得開發設定"
+step "開發設定"
 
 if [ -f .env.local ]; then
-    ok ".env.local 已存在，沿用（要更新就先刪掉它）"
+    ok ".env.local 已就位"
 else
-    gh gist view "$GIST_ID" --raw > .env.local
-    ok "已從私密 gist 取得 .env.local"
+    cat <<'MISSING'
+  ! 找不到 .env.local
+
+    金鑰不放在任何雲端服務上（包括 gist、雲端硬碟、聊天軟體），
+    請自己從 Windows 那台複製過來：
+
+        Windows 端： C:\Me\IOS APP\.env.local
+        複製到    ： 這個專案根目錄
+
+    用隨身碟或你自己的加密管道傳，傳完把中間的副本刪掉。
+    範本可以參考 .env.local.example。
+
+MISSING
+    exit 1
 fi
 
 step "注入金鑰到 BuildSecrets.swift"
@@ -62,19 +61,18 @@ step "產生 Xcode 專案"
 xcodegen generate
 ok "Kikitori.xcodeproj 已產生"
 
-cat <<'EOF'
+cat <<'DONE'
 
 準備完成。接下來：
 
   open Kikitori.xcodeproj
 
-在 Xcode 左上角選一台 iPad 模擬器，按 ⌘R 就會跑起來。
+左上角選一台 iPad 模擬器，按 ⌘R。
 
-要注意的兩件事：
-  1. BuildSecrets.swift 現在有金鑰，不要提交。
-     提交前執行：./scripts/dev-secrets.sh clean
-     （scripts/check.py 也會擋，但自己記得比較好）
-  2. 模擬器上沒有 Spotify App，但 Spotify 連動是走 Web API，
-     只要模擬器有網路、你在 Spotify 網頁版或手機上播放，一樣讀得到。
+兩件要記得的事：
+  1. 提交前執行 ./scripts/dev-secrets.sh clean
+     （BuildSecrets.swift 在版控裡，填了金鑰不能提交；check.py 也會擋）
+  2. 模擬器沒有 Spotify App，但連動走的是 Web API，
+     你在手機或網頁版播放，模擬器一樣讀得到
 
-EOF
+DONE

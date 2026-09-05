@@ -77,6 +77,19 @@ StosVPN 也已從 App Store 下架，現在用 LocalDevVPN。）
 3. iPad 用 USB 接電腦，iPad 上點「信任」並輸入密碼。
 4. 開 iloader → 登入 Apple 帳號（**大小寫有差**）→ 選你的 iPad → 按 **Install SideStore (Stable)**。
 
+> **驅動的坑（這台電腦實際踩過）**
+> Microsoft Store 版的 iTunes 不會裝 USB 驅動，而且 winget 會誤判 `Apple.iTunes` 已安裝、
+> 拒絕重裝；就算加 `--force` 跑完官網版的靜默安裝，`Apple Mobile Device Support` 那包仍然沒進去。
+> 沒有這組驅動，iloader 接上 iPad 也認不到。可靠的解法是把驅動 MSI 挖出來單獨裝：
+>
+> ```powershell
+> curl.exe -sSL -o iTunes64Setup.exe https://www.apple.com/itunes/download/win64
+> & 'C:\Program Files-Zipz.exe' x iTunes64Setup.exe -oitunes_msi -y
+> msiexec /i itunes_msi\AppleMobileDeviceSupport64.msi /qn /norestart
+> ```
+>
+> 裝完 `Get-Service 'Apple Mobile Device Service'` 要顯示 Running 才算成功。
+
 ### iPad 端
 
 5. App Store 安裝 **LocalDevVPN**，打開按 Connect。

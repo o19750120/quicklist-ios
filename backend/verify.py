@@ -113,7 +113,44 @@ def check(words: list[Word], audio_seconds: float) -> Report:
     if ordered[0].start > GAP_THRESHOLD_SECONDS:
         report.problems.append(f"開頭 {ordered[0].start/60:.1f} 分鐘沒有內容")
 
+    report.problems.extend(check_timeline(ordered))
+
     return report
+
+
+def check_timeline(words: list[Word]) -> list[str]:
+    """檢查時間軸本身合不合理。
+
+    這些徵狀不需要標準答案也不需要懂日文，純粹從數字就看得出來，
+    而它們都代表「音軌跟逐字稿沒有對齊」：
+
+    - 時間倒退：後面的詞比前面的還早，通常是切段合併時偏移算錯
+    - 單一詞橫跨十幾秒：那個詞的結束時間被錯誤地延伸了
+    - 語速離譜：日文正常大約每秒 5～8 個字，差太多表示時間軸整段歪掉
+    """
+    problems: list[str] = []
+    if len(words) < 10:
+        return problems
+
+    backwards = sum(1 for a, b in zip(words, words[1:]) if b.start < a.start - 0.05)
+    if backwards:
+        problems.append(f"有 {backwards} 處時間倒退")
+
+    overlong = [w for w in words if w.end - w.start > 10.0]
+    if overlong:
+        worst = max(overlong, key=lambda w: w.end - w.start)
+        problems.append(
+            f"有 {len(overlong)} 個詞橫跨超過 10 秒，"
+            f"最長的是「{worst.text[:10]}」{worst.end - worst.start:.0f} 秒")
+
+    span = words[-1].end - words[0].start
+    if span > 60:
+        chars = sum(len(w.text) for w in words)
+        rate = chars / span
+        if rate < 1.5 or rate > 20:
+            problems.append(f"語速異常：每秒 {rate:.1f} 字（日文口語正常約 5–8）")
+
+    return problems
 
 
 def detect_hallucination(lines: list) -> list[str]:

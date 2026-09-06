@@ -8,9 +8,54 @@ final class TranscriptModel: ObservableObject {
     @Published private(set) var transcript: Transcript?
     @Published private(set) var job: TranscriptJob?
     @Published private(set) var currentLineIndex: Int?
+    /// 播完一句之後要做什麼。跟 `interaction`（點下去要做什麼）是兩件事。
+    @Published private(set) var repeatsCurrentLine = false
+    /// 正在重聽哪一句。鎖住它，播到句尾就跳回句首，直到使用者自己往下。
+    @Published private(set) var repeatingLine: Int?
+
+    /// 剛剛才跳回句首，先別再跳一次 ——
+    /// seek 要等 Spotify 回應，那之前進度還會往前跑幾次，會連續觸發。
+    private var lastRepeatAt = Date.distantPast
+
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
     @Published var showTranslation = true
+
+    /// 點一句話要做什麼。
+    ///
+    /// 兩件事搶同一個手勢：點句子跳到那裡播、點詞查意思。
+    /// 日文的詞佔滿整行，沒有真正的「空白處」可以分流，所以改成明講的模式切換。
+    @Published var interaction: Interaction = .playback
+
+    enum Interaction: String, CaseIterable, Identifiable {
+        /// 點一句就讓 Spotify 跳到那裡
+        case playback
+        /// 點一個詞就查意思
+        case lookup
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .playback: return "播放"
+            case .lookup:   return "查詞"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .playback: return "play.fill"
+            case .lookup:   return "text.magnifyingglass"
+            }
+        }
+
+        var hint: String {
+            switch self {
+            case .playback: return "點一句跳到那裡"
+            case .lookup:   return "點一個詞看意思"
+            }
+        }
+    }
 
     private let service = SupabaseService()
     /// 目前這份逐字稿是哪一集的。外面要拿句數時得先確認是同一集，
@@ -38,6 +83,8 @@ final class TranscriptModel: ObservableObject {
         job = nil
         currentLineIndex = nil
         errorMessage = nil
+        repeatsCurrentLine = false
+        repeatingLine = nil
 
         await reload(episodeID: episodeID)
     }
@@ -70,6 +117,42 @@ final class TranscriptModel: ObservableObject {
             errorMessage = error.localizedDescription
             logError("逐字稿", error.localizedDescription)
         }
+    }
+
+    // MARK: - 逐句重聽
+
+    func toggleRepeat() {
+        repeatsCurrentLine.toggle()
+        repeatingLine = repeatsCurrentLine ? currentLineIndex : nil
+        lastRepeatAt = .distantPast
+        logInfo("逐句重聽", repeatsCurrentLine ? "開啟，鎖住第 \((repeatingLine ?? -1) + 1) 句" : "關閉")
+    }
+
+    /// 使用者自己跳到別句時，重聽的對象跟著換過去。
+    func moveRepeat(to index: Int) {
+        guard repeatsCurrentLine else { return }
+        repeatingLine = index
+        lastRepeatAt = Date()
+    }
+
+    /// 播到這一句的結尾了嗎？是的話回傳該跳回去的那一句。
+    ///
+    /// 呼叫端拿到之後負責叫 Spotify 跳轉 —— 這裡不直接碰播放，
+    /// 免得這個 model 得知道 SpotifyAPI 的存在。
+    func lineToRepeat(at positionMs: Int) -> TranscriptLine? {
+        // 按下開關時如果還沒開始跟隨（currentLineIndex 是 nil），
+        // repeatingLine 也會是 nil —— 那時退回用當下這一句，不要整個不動作。
+        guard repeatsCurrentLine,
+              let transcript,
+              let index = repeatingLine ?? currentLineIndex,
+              index >= 0, index < transcript.lines.count else { return nil }
+
+        let line = transcript.lines[index]
+        guard positionMs >= line.endMs else { return nil }
+        guard Date().timeIntervalSince(lastRepeatAt) > 1.5 else { return nil }
+
+        lastRepeatAt = Date()
+        return line
     }
 
     // MARK: - 跟著播放位置走

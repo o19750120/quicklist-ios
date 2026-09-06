@@ -57,6 +57,13 @@ create table if not exists public.kikitori_jobs (
     attempts            integer not null default 0,
     created_at          timestamptz not null default now(),
     updated_at          timestamptz not null default now(),
+    -- 這一集從按下按鈕到呈現在 App 之間發生過什麼：每個階段花多久、
+    -- 用了哪些模型、中途換過幾次手、每個模型的成功失敗與金鑰使用。
+    -- 由 backend/trace.py 寫入，`python backend/status.py --job <id>` 可讀。
+    --
+    -- 原本這些只在 CI 日誌裡，而 CI 日誌會過期也沒辦法查詢，
+    -- 所以「這集為什麼跑了 23 分鐘」事後答不出來。
+    diagnostics         jsonb,
     constraint kikitori_jobs_status_check
         check (status in ('queued', 'running', 'done', 'failed'))
 );

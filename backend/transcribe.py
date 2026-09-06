@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import providers  # noqa: E402
 from find_episode import find_episode  # noqa: E402
+import trace as trace_module  # noqa: E402
 import verify  # noqa: E402
 import vocab  # noqa: E402
 from segment import refine_word_boundaries, resegment, stats  # noqa: E402
@@ -37,9 +38,13 @@ log = providers.log
 
 def build(show_name: str, episode_title: str, duration_ms: int | None,
           language: str, translate_to: str,
-          on_stage=None) -> tuple[dict, list[dict], str, dict]:
-    # 每個階段都回報一次，App 那頭排隊畫面才看得到進度，不會只有「排隊中」三個字
+          on_stage=None, trace=None) -> tuple[dict, list[dict], str, dict]:
+    # 每個階段都回報一次，App 那頭排隊畫面才看得到進度，不會只有「排隊中」三個字。
+    # 同時記進 trace —— stage 原本每次覆蓋前一個，跑完只剩「完成」兩個字，
+    # 事後問「這集為什麼花了 23 分鐘」完全答不出來。
     def stage(text: str) -> None:
+        if trace:
+            trace.stage(text)
         if on_stage:
             on_stage(text)
 
@@ -56,12 +61,18 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
     try:
         audio_seconds = verify.probe_duration(episode.audio_url)
         log(f"音檔長度 {audio_seconds/60:.1f} 分")
+        if trace:
+            trace.fact(audio_seconds=round(audio_seconds, 1))
     except Exception as exc:
         audio_seconds = None
         log(f"量不到音檔長度（{exc}），這次跳過涵蓋檢查")
 
     stage("轉錄中")
-    words, model = providers.transcribe(episode.audio_url, language, audio_seconds)
+    words, model = providers.transcribe(
+        episode.audio_url, language, audio_seconds,
+        on_fallback=(trace.fallback if trace else None))
+    if trace:
+        trace.model("轉錄", model)
 
     stage("斷句")
     # 先用形態素解析找出日文真正的詞邊界。轉錄引擎給的「詞」不是語素 ——
@@ -91,6 +102,10 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
 
     stage(f"翻譯 {len(rows)} 句")
     translations = providers.translate([row["text"] for row in rows], translate_to)
+    if trace:
+        # 翻譯實際用了哪個模型只有 available_models 的快取知道
+        picked = providers.pick_model("gemini", providers._keys("GEMINI_API_KEYS"))
+        trace.model("翻譯", f"gemini/{picked}" if picked else "groq")
     for row, translated in zip(rows, translations):
         row["translation"] = translated
 
@@ -103,6 +118,8 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
     try:
         vocabulary = vocab.build(rows)
         log(f"詞表：{vocab.stats(vocabulary)}")
+        if trace and vocab.READING_MODELS_USED:
+            trace.model("讀音覆核", list(vocab.READING_MODELS_USED))
     except Exception as exc:
         vocabulary = {}
         log(f"建詞表失敗（{exc}），這集先不附詞表")
@@ -110,6 +127,9 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
     # 這一趟打了哪些 API、用了哪幾把金鑰、哪些失敗、為什麼失敗。
     # 沒有這個的話「為什麼換手」只能用猜的 —— 已經因此誤判過一次。
     log(providers.call_summary())
+    if trace:
+        trace.fact(lines=len(rows),
+                   vocab_words=len((vocabulary or {}).get("vocab", {})))
 
     episode_row = {
         "show_name": show.name,
@@ -150,11 +170,22 @@ def main() -> int:
     supabase = Supabase() if needs_db else None
 
     if args.job:
-        rows = supabase.select("kikitori_jobs", f"id=eq.{args.job}&limit=1")
-        if not rows:
-            log(f"找不到任務 {args.job}")
-            return 1
-        job = rows[0]
+        # **先認領再做。** Supabase 的觸發器在任務建立後兩秒就叫醒 CI，
+        # 所以同一個任務很容易被兩邊同時撿走 —— 實測本機跑到一半，
+        # CI 也在跑同一集，狀態互相覆蓋，而且整集轉了兩次、API 花雙倍。
+        #
+        # 認領方式是「只有還在 queued 的才能改成 running」。
+        # PostgREST 的 PATCH 帶條件時，條件不成立就回空陣列，
+        # 那就是「別人已經拿走了」。
+        claimed = supabase.update(
+            "kikitori_jobs", f"id=eq.{args.job}&status=eq.queued",
+            {"status": "running", "stage": "認領"})
+        if not claimed:
+            rows = supabase.select("kikitori_jobs", f"select=status&id=eq.{args.job}&limit=1")
+            state = rows[0]["status"] if rows else "不存在"
+            log(f"任務 {args.job[:8]} 已經是 {state}，別人正在處理或已完成，這次跳過")
+            return 0
+        job = claimed[0]
         show_name = job["show_name"]
         episode_title = job["episode_title"]
         spotify_id = job["spotify_episode_id"]
@@ -182,11 +213,31 @@ def main() -> int:
         }, ensure_ascii=False, indent=2))
         return 0 if match else 1
 
+    # 一集從按下按鈕到呈現在 App 之間發生過什麼，全部記下來。
+    # 原本這些資訊分散在三個地方而且都留不住（見 trace.py 的說明）。
+    run = trace_module.Trace()
+
     def mark(status: str, stage: str = "", error: str = ""):
         if job and supabase:
             supabase.update("kikitori_jobs", f"id=eq.{job['id']}", {
                 "status": status, "stage": stage, "error": error[:1000],
             })
+
+    def save_trace(status: str, error: str = "") -> None:
+        """把完整紀錄寫進 kikitori_jobs.diagnostics。
+
+        失敗也要寫 —— 「為什麼失敗」正是最需要查的時候。
+        寫紀錄本身失敗不該讓整集報廢，所以吞掉例外但要講出來。
+        """
+        report = run.finish(status, error)
+        log(trace_module.summarise(report))
+        if not (job and supabase):
+            return
+        try:
+            supabase.update("kikitori_jobs", f"id=eq.{job['id']}",
+                            {"diagnostics": report})
+        except Exception as exc:
+            log(f"紀錄寫不進資料庫（{exc}），只留在這份日誌裡")
 
     try:
         # 先確認翻譯服務活著。沒有翻譯的逐字稿對學語言的人沒有用，
@@ -201,10 +252,12 @@ def main() -> int:
         mark("running", "準備中")
         episode_row, lines, model, vocabulary = build(
             show_name, episode_title, duration_ms, args.language, args.translate_to,
-            on_stage=lambda text: mark("running", text),
+            on_stage=lambda text: mark("running", text), trace=run,
         )
 
         if args.preview:
+            # 本機試跑也要印紀錄 —— 不然開發時看不到自己剛加的東西對不對
+            save_trace("preview")
             print(f"\n=== 前 12 句（共 {len(lines)} 句）===")
             for row in lines[:12]:
                 start = row["start_ms"] / 1000
@@ -232,6 +285,7 @@ def main() -> int:
         }, "episode_id")
 
         mark("done", "完成")
+        save_trace("done")
         export_env(KIKITORI_RESULT=f"{len(lines)} 句")
         log(f"已寫入 Supabase，episode_id={episode_id}，共 {len(lines)} 句")
         return 0
@@ -239,6 +293,7 @@ def main() -> int:
     except Exception as exc:
         log(f"失敗：{exc}")
         mark("failed", "", str(exc))
+        save_trace("failed", str(exc))
         return 1
 
 

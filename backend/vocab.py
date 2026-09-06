@@ -47,6 +47,10 @@ READING_MODELS = ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-3-fl
 # 而不是默默挑一個 —— 有些詞本來就有多種正確讀法，連日本人都會分歧。
 DISPUTED = "?"
 
+# 這一趟實際用到哪兩個模型做覆核。寫進 job 的紀錄裡，
+# 之後回頭查「這集的假名為什麼標成這樣」才有依據。
+READING_MODELS_USED: list[str] = []
+
 # 一批送幾個詞去覆核。不是為了省呼叫次數 —— 一次送太多模型會變隨便，
 # 實測 655 個詞一次送，兩個模型的分歧率從 4% 飆到 22%，
 # 而且同一集跑兩次會得到不一樣的結果（temperature=0 也一樣）。
@@ -191,6 +195,8 @@ def verify_readings(cases: list[dict]) -> dict[int, str]:
                     break
         return None
 
+    dead: set[str] = set()
+
     def run(model: str) -> dict[int, str] | None:
         """整份跑完，但分批送。
 
@@ -199,12 +205,19 @@ def verify_readings(cases: list[dict]) -> dict[int, str]:
         分成 READING_BATCH 一批之後才穩定。這跟 `providers.py` 的翻譯
         早就記過的教訓一樣（120 詞一批時 flash-lite 整筆漏掉 15%）。
         """
+        if model in dead:
+            return None
         indexed = list(enumerate(cases))
         merged: dict[int, str] = {}
         for start in range(0, len(indexed), READING_BATCH):
             answers = ask(model, indexed[start:start + READING_BATCH])
             if answers is None:
-                return None          # 這個模型整個不通，換下一個
+                # 八把金鑰全試過還是不通 —— 這一輪就別再碰它了。
+                # 原本每一批都會重試一次，實測 gemini-2.5-flash-lite
+                # 一集浪費 15 次呼叫、14 秒（400／404／429 混在一起）。
+                dead.add(model)
+                providers.log(f"讀音覆核：{model} 這一輪全部失敗，之後不再嘗試")
+                return None
             merged.update(answers)
         return merged
 
@@ -233,6 +246,7 @@ def verify_readings(cases: list[dict]) -> dict[int, str]:
 
     if len(votes) == 1:
         providers.log(f"讀音覆核：只有 {used[0]} 回應，無法判斷不確定性")
+        READING_MODELS_USED[:] = used
         return votes[0]
 
     merged: dict[int, str] = {}
@@ -248,6 +262,7 @@ def verify_readings(cases: list[dict]) -> dict[int, str]:
             merged[index] = first or second
     providers.log(f"讀音覆核：{used[0]} + {used[1]}，"
                   f"{len(merged)}/{len(cases)} 筆，其中 {disputed} 筆兩邊不一致")
+    READING_MODELS_USED[:] = used
     return merged
 
 

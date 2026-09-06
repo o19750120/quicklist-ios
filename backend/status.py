@@ -58,7 +58,8 @@ def show_jobs(db: Supabase) -> None:
     section("轉錄任務")
     rows = db.select(
         "kikitori_jobs",
-        "select=show_name,episode_title,status,stage,error,created_at"
+        "select=id,show_name,episode_title,status,stage,error,"
+        "created_at,updated_at,diagnostics"
         "&order=created_at.desc&limit=8",
     )
     if not rows:
@@ -71,6 +72,46 @@ def show_jobs(db: Supabase) -> None:
               f"{r['show_name'][:16]:<18} {r['episode_title'][:28]}")
         if r.get("error"):
             print(f"      錯誤：{r['error'][:100]}")
+        # 一行摘要就好，完整的用 --job 看
+        d = r.get("diagnostics") or {}
+        if d:
+            models = d.get("models") or {}
+            print(f"      {d.get('seconds', 0)/60:.1f} 分"
+                  f"　{d.get('lines', '?')} 句"
+                  f"　轉錄={models.get('轉錄', '?')}"
+                  + ("　（中途換過手）" if d.get("fallbacks") else ""))
+
+
+def show_job_detail(db: Supabase, job_id: str) -> int:
+    """一集的完整紀錄：每個階段花多久、用了哪些模型、換過幾次手。
+
+    這是「這集為什麼跑了 23 分鐘」的答案。原本這些資訊只在 CI 日誌裡，
+    而 CI 日誌會過期也沒辦法查詢。
+    """
+    import trace as trace_module
+
+    # 前綴也接受 —— 從畫面上抄整串 uuid 很煩。
+    # 但不能先試 id=eq.<前綴> 再退回比對：PostgREST 收到不完整的 uuid
+    # 會直接回 400，例外在退路跑到之前就把整個指令炸掉了。
+    if len(job_id) == 36:
+        rows = db.select("kikitori_jobs", f"select=*&id=eq.{job_id}")
+    else:
+        rows = [r for r in db.select("kikitori_jobs",
+                                     "select=*&order=created_at.desc&limit=50")
+                if r["id"].startswith(job_id)]
+    if not rows:
+        print(f"找不到任務 {job_id}")
+        return 1
+
+    job = rows[0]
+    section(f"{job['show_name'][:20]} / {job['episode_title'][:36]}")
+    print(f"  狀態 {job['status']}　建立 {job['created_at'][:19]}"
+          f"　最後更新 {(job.get('updated_at') or '')[:19]}")
+    if job.get("error"):
+        print(f"  錯誤：{job['error'][:200]}")
+    print()
+    print(trace_module.summarise(job.get("diagnostics") or {}))
+    return 0
 
 
 def show_transcripts(db: Supabase) -> None:
@@ -165,12 +206,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--logs", type=int, default=15)
     parser.add_argument("--errors", action="store_true")
+    parser.add_argument("--job", help="看某一集的完整紀錄（id 或前幾碼）")
     parser.add_argument("--has-queued", action="store_true",
                         help="只回答有沒有排隊中的任務（退出碼 0 = 有），給 CI 用")
     args = parser.parse_args()
 
     env.require("SUPABASE_URL", "SUPABASE_SERVICE_KEY")
     db = Supabase()
+
+    if args.job:
+        return show_job_detail(db, args.job)
 
     if args.has_queued:
         # CI 的排程每 15 分鐘跑一次，但多數時候沒事做。

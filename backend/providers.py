@@ -574,7 +574,8 @@ def transcribe_groq(audio_url: str, language: str) -> list[Word]:
 
 
 def transcribe(audio_url: str, language: str,
-               audio_seconds: float | None = None) -> tuple[list[Word], str]:
+               audio_seconds: float | None = None,
+               on_fallback=None) -> tuple[list[Word], str]:
     """轉錄音檔。先試 Deepgram，不行才退回 Whisper。
 
     給了 audio_seconds 的話，每一家的結果都會先驗證涵蓋範圍才採用 ——
@@ -603,6 +604,8 @@ def transcribe(audio_url: str, language: str,
         except Exception as exc:
             last_error = f"{name} {exc}"
             log(f"{name} 失敗（{exc}），換下一家")
+            if on_fallback:
+                on_fallback(f"{name} 失敗：{exc}")
             continue
 
         if audio_seconds:
@@ -610,6 +613,8 @@ def transcribe(audio_url: str, language: str,
             if not report.ok:
                 last_error = f"{name} {report.summary()}"
                 log(f"{name} 涵蓋檢查沒過：{report.summary()}，換下一家")
+                if on_fallback:
+                    on_fallback(f"{name} 涵蓋檢查沒過：{report.summary()}")
                 continue
             log(f"{name} 涵蓋檢查通過（{report.coverage_ratio*100:.1f}%）")
 

@@ -636,8 +636,8 @@
 做過等價的事，EDRDG 官方也沒有中文分支。Tomoshi 是目前唯一的解。
 
 - [x] 找到中文釋義來源並驗證涵蓋率
-- [ ] App 裡放出處標示（CC BY-SA 的義務，`dictionary.ATTRIBUTION` 有字串）：
-      EDRDG（JMdict/JMnedict）+ Tomoshi (Y1Z)。這要在 Mac 那邊做 Swift。
+- [x] App 裡放出處標示（2026-09-06 完成）。設定頁多了「字典來源」一區，
+      列 EDRDG（JMdict/JMnedict）與 Tomoshi (Y1Z)，都標 CC BY-SA 4.0。
 - [x] **字典走後端不綁進 App**（2026-09-06 完成）。做法是
       `backend/vocab.py`：轉錄時就把該集的詞表與**詞邊界**查好，
       存進 `kikitori_transcripts.vocab`，跟逐字稿一起下載。
@@ -757,8 +757,8 @@ OpenCC 的 IT 詞表裡」—— `低級→低階`、`彙編→組譯` 這兩條
 沒有 API、Jisho 官方明確反對爬取（10 req/10 秒就 429），而且那跟「離線字典」
 的前提相反。**但開連結給使用者自己看完全沒問題**，那不是抓取：
 
-- [ ] App 端可以做「在 Weblio 查」「在 Jisho 查」的外部連結，
-      給那 3.4% 查不到的詞當補充。`cjjc.weblio.jp` 是日中辭典（160 萬語，簡中）。
+- [x] App 端的外部連結做好了（2026-09-06）。詞義卡片底下有 Weblio、Jisho、
+      日中辭典（`cjjc.weblio.jp`）三個按鈕，只做 openURL 不抓資料。
 
 #### 自我評分（2026-09-06）—— 留著當後續改進的參照
 

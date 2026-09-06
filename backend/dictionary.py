@@ -475,7 +475,7 @@ class Dictionary:
                  "senses": json.loads(senses)}
                 for source, common, readings, kanji, senses in cursor]
 
-    def lookup(self, word: str, reading: str = "", pos: str = "",
+    def lookup(self, word: str, reading: str = "", pos=(),
                normalized: str = "") -> dict | None:
         """查一個詞。給了語境讀音就用它挑同形異讀。
 
@@ -529,18 +529,41 @@ class Dictionary:
         # 試過用 Tomoshi 的 freq_rank 當依據，**實測反而更糟**：
         # 琴（rank 2052）排在事（3613）前面、居る 根本不在榜上。
         # 那份排名反映的是漢字寫法的頻率，對純假名的詞是誤導。
+        # Sudachi 的詞性有六層，第二層直接說了這是不是專有名詞。
+        #
+        # 「国」（普通名詞）本來會被解成人名 Koku、「六」（数詞）被解成 Mui ——
+        # 因為 JMnedict 裡有一堆姓氏就寫作那個字，而只要它的讀音對得上、
+        # JMdict 那筆對不上，排序再怎麼排都輪不到。
+        #
+        # 所以人名條目要**先被擋掉**，不是排在後面：Sudachi 說不是專有名詞
+        # 就整批不考慮，除非那個詞在 JMdict 裡根本不存在。
+        levels = tuple(pos) if isinstance(pos, (list, tuple)) else (pos,)
+        head = levels[0] if levels else ""
+        second = levels[1] if len(levels) > 1 else ""
+        if second != "固有名詞":
+            # 數詞永遠不是人名，就算 JMdict 沒收也一樣。
+            # 「三十一」在 JMdict 裡不存在，但 JMnedict 有個姓氏叫 Mitoi ——
+            # 那時「有 jmdict 才擋」這個條件失效，數字就被解成人名。
+            # 這個判斷不需要字典，Sudachi 說是数詞就夠了。
+            if second == "数詞":
+                entries = [e for e in entries if e["source"] == "jmdict"]
+            elif any(e["source"] == "jmdict" for e in entries):
+                entries = [e for e in entries if e["source"] == "jmdict"]
+        if not entries:
+            return None
+
         target_kanji = unicodedata.normalize("NFKC", normalized) if normalized else ""
         kana_only = not any("一" <= c <= "鿿" for c in form)
         entries.sort(key=lambda e: (
             not (target_kanji and target_kanji in e.get("kanji", [])),
-            # 人名要排在一般詞後面，而且要排在「古語」判斷**之前**。
+            # 人名排在一般詞後面，而且要排在「古語」判斷**之前**。
             # 「あと」的 JMdict「後」帶 arch 標記，而 JMnedict 有個姓氏
-            # 也寫作「後」—— 先扣古語的分就會讓姓氏贏，於是普通的「あと」
-            # 被解成人名 Ato。一般詞就算標成古語也比姓氏合理。
+            # 也寫作「後」—— 先扣古語的分就會讓姓氏贏。
+            # 一般詞就算標成古語也比姓氏合理。
             e["source"] != "jmdict",
             _has_misc(e, ("arch", "obs", "rare")),
             not (kana_only and _has_misc(e, ("uk",))),
-            not (pos and _pos_matches(e, pos)),
+            not (head and _pos_matches(e, head)),
             not e["common"],
         ))
 

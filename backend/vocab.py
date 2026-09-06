@@ -293,8 +293,10 @@ def build(lines: list[dict], db_path: Path | None = None,
                 # normalized_form 是最強的線索：Sudachi 會把「いる」正規化成
                 # 「居る」、「すごい」正規化成「凄い」。純假名的高頻詞
                 # （いう／いる／こと）讀音與詞性都分不出來，只有這個分得出。
+                # 傳整組詞性，不是只傳第一層 —— 第二層的「固有名詞」
+                # 才擋得住「国」被解成姓氏 Koku、「六」被解成 Mui
                 entry = dictionary.lookup(lemma, _lemma_reading(tokenizer, token),
-                                          token.part_of_speech()[0],
+                                          token.part_of_speech(),
                                           token.normalized_form())
                 span = [index, cursor, lemma if entry else None]
                 spans.append(span)

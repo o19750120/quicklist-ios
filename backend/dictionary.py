@@ -78,9 +78,54 @@ _E_TO_U = dict(zip("けせてねへめれげぜでべぺえ", "くすつぬふ�
 # JMnedict 的假名是片假名，Sudachi 給的讀音也是片假名，但 JMdict 是平假名
 _KATA_TO_HIRA = str.maketrans({chr(c): chr(c - 0x60) for c in range(0x30A1, 0x30F7)})
 
+# Sudachi 的詞性 → JMdict 的詞性標記。
+#
+# 同一個詞形＋同一個讀音仍然可能是好幾個條目：「あ」讀作あ的就有
+# 代名詞（I）、感動詞（ah）、接頭辭（sub-）三個。只靠常用度排序的話
+# 兩個都常用時就變成看資料庫順序，等於擲骰子。
+#
+# Sudachi 已經在斷詞時判斷過詞性了，拿來當第三個判斷依據。
+# 兩邊都是封閉的標記集，不是「想到什麼補什麼」的個案清單。
+_POS_TO_JMDICT = {
+    "感動詞": ("int",),
+    "代名詞": ("pn",),
+    "名詞": ("n", "n-suf", "n-pref", "vs"),
+    "動詞": ("v1", "v5", "vk", "vs", "vi", "vt"),
+    "形容詞": ("adj-i", "adj-na"),
+    "形状詞": ("adj-na",),
+    "副詞": ("adv", "adv-to"),
+    "連体詞": ("adj-pn",),
+    "接続詞": ("conj",),
+    "接頭辞": ("pref",),
+    "接尾辞": ("suf", "n-suf"),
+}
+
+
+def _pos_matches(entry: dict, sudachi_pos: str) -> bool:
+    """這個條目的詞性跟 Sudachi 判斷的一致嗎。"""
+    wanted = _POS_TO_JMDICT.get(sudachi_pos)
+    if not wanted:
+        return False
+    tags = {t for sense in entry["senses"] for t in sense["pos"]}
+    return any(t.startswith(w) for t in tags for w in wanted)
+
 
 def to_hiragana(text: str) -> str:
     return (text or "").translate(_KATA_TO_HIRA)
+
+
+def reading_signature(readings) -> str:
+    """把一個條目的讀音組合成指紋，用來跨資料來源認出同一個條目。
+
+    中文釋義（Tomoshi）與英文釋義（JMdict）是兩份資料，各自有自己的編號，
+    沒辦法直接對應。但兩邊都源自 JMdict，所以**讀音組合是可靠的指紋** ——
+    「あ」有七個條目，讀音組合分別是 {おし,あ,おうし}、{われ,わ,あ,…}、
+    {あっ,あ} 等等，兩邊完全對得起來。
+
+    沒有這個的話，英文會挑到「唖（muteness）」而中文挑到「我（I）」，
+    兩個都掛在同一個詞上 —— 那正是 Mac 那邊回報的症狀。
+    """
+    return "／".join(sorted({to_hiragana(r) for r in readings if r}))
 
 
 def _download(url: str, target: Path) -> Path:
@@ -285,21 +330,24 @@ def _import_chinese(connection: sqlite3.Connection, cache: Path) -> int:
         form = unicodedata.normalize("NFKC", text)
         payload = json.dumps(glosses, ensure_ascii=False)
         # 讀音留空的那筆是 fallback，給沒有語境讀音時用
-        rows.append((form, "", is_common, payload))
+        signature = reading_signature(readings.get(entry_id, ()))
+        rows.append((form, "", signature, is_common, payload))
         for reading in readings.get(entry_id, ()):
-            rows.append((form, to_hiragana(reading), is_common, payload))
+            rows.append((form, to_hiragana(reading), signature, is_common, payload))
     source.close()
 
     connection.executescript("""
         CREATE TABLE chinese (
             form    TEXT NOT NULL,
             reading TEXT NOT NULL,   -- 平假名；空字串是該詞形的預設
+            sig     TEXT NOT NULL,   -- 讀音組合，跨來源認條目用（見 reading_signature）
             common  INTEGER NOT NULL,
             senses  TEXT NOT NULL
         );
     """)
-    connection.executemany("INSERT INTO chinese VALUES (?,?,?,?)", rows)
+    connection.executemany("INSERT INTO chinese VALUES (?,?,?,?,?)", rows)
     connection.execute("CREATE INDEX idx_chinese ON chinese(form, reading)")
+    connection.execute("CREATE INDEX idx_chinese_sig ON chinese(form, sig)")
     connection.commit()
     return connection.execute(
         "SELECT COUNT(DISTINCT form) FROM chinese").fetchone()[0]
@@ -397,7 +445,7 @@ class Dictionary:
                  "readings": json.loads(readings), "senses": json.loads(senses)}
                 for source, common, readings, senses in cursor]
 
-    def lookup(self, word: str, reading: str = "") -> dict | None:
+    def lookup(self, word: str, reading: str = "", pos: str = "") -> dict | None:
         """查一個詞。給了語境讀音就用它挑同形異讀。
 
         reading 傳 Sudachi 的 reading_form()（片假名）。這件事很重要 ——
@@ -420,34 +468,67 @@ class Dictionary:
         if not entries:
             return None
 
+        # **先排序再比對讀音**，不是只在對不上時才排。
+        #
+        # 「あ」有七個條目，其中「唖（muteness，不常用）」與
+        # 「あっ（ah／oh，常用，感動詞）」的讀音都含「あ」。照資料庫順序
+        # 取第一個對得上的會拿到「唖」—— 明明有個常用得多的正解在後面。
+        entries.sort(key=lambda e: (not e["common"], e["source"] != "jmdict"))
+
         chosen = None
         # 兩邊都轉平假名再比。JMdict 的外來語讀音存的是片假名
         # （トイレ、オフィス、ニュース），只把輸入轉成平假名的話永遠對不上，
         # 而外來語在 podcast 裡非常多，這個錯會讓一大票詞的讀音變成「用猜的」。
+        # 詞性對得上的排前面。Sudachi 已經判斷過這個詞在這句話裡是什麼詞性，
+        # 那是免費的第三個判斷依據 —— 「あ」讀作あ的有代名詞、感動詞、接頭辭
+        # 三個條目而且兩個都常用，只靠常用度排序等於擲骰子。
+        if pos:
+            entries.sort(key=lambda e: (not _pos_matches(e, pos),
+                                        not e["common"], e["source"] != "jmdict"))
+
         target = to_hiragana(reading)
         if target:
             for entry in entries:
-                if any(target == to_hiragana(r) for r in entry["readings"]):
-                    chosen = {"form": matched, "matched_reading": True, **entry}
+                hit = next((r for r in entry["readings"]
+                            if to_hiragana(r) == target), None)
+                if hit:
+                    # 回報**實際對上的**讀音，不是 readings[0]。
+                    # 「あ」對上的是あ，但 readings[0] 是おし —— 直接拿第一個
+                    # 會標出一個跟這句話無關的讀音。
+                    chosen = {"form": matched, "matched_reading": True,
+                              "reading": to_hiragana(hit), **entry}
                     break
 
         if chosen is None:
-            # 沒有語境讀音時，常用詞優先，一般詞優先於人名
-            entries.sort(key=lambda e: (not e["common"], e["source"] != "jmdict"))
-            chosen = {"form": matched, "matched_reading": False, **entries[0]}
+            chosen = {"form": matched, "matched_reading": False,
+                      "reading": to_hiragana(entries[0]["readings"][0])
+                      if entries[0]["readings"] else "", **entries[0]}
 
-        # 中文用同一個讀音去挑，否則會出現「讀音挑對了、中文卻是另一個意思」
-        chosen["zh"] = self.chinese(matched, reading or
-                                    (chosen["readings"][0] if chosen["readings"] else ""))
+        # 中文要認**同一個條目**，不是只認同一個讀音。
+        # 中英文是兩份資料、各自有編號，但都源自 JMdict，
+        # 所以用讀音組合當指紋（見 reading_signature）。
+        chosen["zh"] = self.chinese(matched, chosen["reading"],
+                                    reading_signature(chosen["readings"]))
         return chosen
 
-    def chinese(self, form: str, reading: str = "") -> list[str]:
+    def chinese(self, form: str, reading: str = "",
+                signature: str = "") -> list[str]:
         """繁體中文釋義，一個義項一條。查不到回空陣列。
 
-        有讀音就用它挑 —— 市場【しじょう】是金融市場、【いちば】是菜市場，
-        中文釋義完全不同。挑不到才退回該詞形的預設。
+        三層由嚴到寬：
+
+        1. **讀音組合**（指紋）—— 認的是同一個 JMdict 條目，最可靠。
+           少了這層會出現「英文是唖 muteness、中文是我 I」掛在同一個詞上。
+        2. **單一讀音** —— 市場【しじょう】是金融市場、【いちば】是菜市場。
+        3. **只看詞形** —— 最後的退路。
         """
         form = unicodedata.normalize("NFKC", form)
+        if signature:
+            row = self.connection.execute(
+                "SELECT senses FROM chinese WHERE form = ? AND sig = ? "
+                "ORDER BY common DESC LIMIT 1", (form, signature)).fetchone()
+            if row:
+                return json.loads(row[0])
         target = to_hiragana(reading)
         if target:
             # 中文表建索引時讀音已經統一轉成平假名，所以這裡只要轉輸入

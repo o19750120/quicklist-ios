@@ -28,6 +28,9 @@ struct WordDetailView: View {
                     if let entry, !entry.english.isEmpty {
                         senses("English", entry.english, tint: Theme.textSecondary)
                     }
+                    if let entry, !entry.hasChinese, !entry.english.isEmpty {
+                        chineseMissing
+                    }
                     if entry == nil {
                         notFound
                     }
@@ -123,6 +126,23 @@ struct WordDetailView: View {
                 }
             }
         }
+    }
+
+    /// 有英文但沒中文。中文釋義的來源本身就缺這一筆，
+    /// 而寧可不給也不給錯的 —— 給學語言的人看一個錯的中文比看不到更糟，
+    /// 他無從察覺那是錯的。所以這裡要講清楚，不然看起來像壞掉。
+    private var chineseMissing: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
+            Image(systemName: "info.circle")
+                .font(.caption)
+            Text("這個詞的中文釋義在字典來源裡缺漏，所以只有英文。")
+                .font(.caption)
+        }
+        .foregroundStyle(Theme.textSecondary)
+        .padding(Theme.Space.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.md,
+                                                        style: .continuous))
     }
 
     private var notFound: some View {

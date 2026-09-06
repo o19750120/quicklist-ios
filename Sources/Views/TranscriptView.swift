@@ -310,7 +310,7 @@ struct TranscriptView: View {
                         .font(.caption)
                         .foregroundStyle(Theme.textSecondary)
                 }
-                Text("一集大約幾分鐘，好了會自動出現，可以先去聽")
+                Text(queueEstimate)
                     .font(.caption)
                     .foregroundStyle(Theme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -356,6 +356,19 @@ struct TranscriptView: View {
         .padding(.vertical, Theme.Space.xxl)
         // 要撐滿剩下的高度，否則上方的資訊列會被 VStack 垂直置中推到畫面中間
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 等多久，依這一集多長來講。
+    ///
+    /// 主要成本在讀音覆核，而它會撞 API 配額 —— 40 分鐘的節目實測要十分鐘左右，
+    /// 11 分鐘的只要兩分半。用同一句「大約幾分鐘」對長節目是騙人的，
+    /// 使用者會以為卡住了。
+    private var queueEstimate: String {
+        let minutes = episode.durationMs / 60_000
+        guard minutes >= 20 else {
+            return "大約兩三分鐘，好了會自動出現，可以先去聽。"
+        }
+        return "這一集有 \(minutes) 分鐘，長節目大約要等十分鐘。\n好了會自動出現，可以先去聽。"
     }
 
     private func requestButton(title: String) -> some View {

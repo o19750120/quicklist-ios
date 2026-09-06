@@ -121,7 +121,15 @@ def check(words: list[Word], audio_seconds: float) -> Report:
     if ordered[0].start > GAP_THRESHOLD_SECONDS:
         report.problems.append(f"開頭 {ordered[0].start/60:.1f} 分鐘沒有內容")
 
-    report.problems.extend(check_timeline(ordered))
+    # **要傳原始順序，不能傳排序過的。**
+    #
+    # 這行原本傳 ordered，而 ordered 是按 start 排序過的 ——
+    # 於是 check_timeline 要找的「時間倒退」在它拿到資料時已經被排掉了，
+    # 這個檢查寫了、跑了、但永遠不可能觸發。
+    #
+    # 實際代價：一份有 64 句 end<start、41 處時間倒退的逐字稿
+    # 通過了驗證寫進資料庫，App 上那些句子會在錯的時間高亮或永遠不亮。
+    report.problems.extend(check_timeline(words))
 
     return report
 

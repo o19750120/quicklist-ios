@@ -222,6 +222,15 @@ def transcribe_deepgram(audio_url: str, language: str) -> list[Word]:
     ]
 
 
+# 一段音檔的轉錄逾時。
+#
+# 原本設 900 秒（怕 verbatim 太慢），實測一段 9.7 MB 只要 101 秒 ——
+# 但有一次連線在 SSL 交握就卡住，於是**整整等了 900 秒才失敗**，
+# 40 分鐘的節目總共花 23 分半，其中 15 分鐘是在等那個逾時。
+#
+# 300 秒對正常情況仍有三倍餘裕，卡住時損失只剩五分之一。
+TRANSCRIBE_TIMEOUT = 300
+
 # 開詞級時間戳之後的實測邊界：31 分以內乾淨，35 分開始有 annotation 缺尾，
 # 45 分時間戳出現鬼值，55 分只轉到 63%，60 分直接 400。
 # 留一點餘裕切在 28 分。
@@ -290,7 +299,7 @@ def _gemini_transcribe_clip(path: Path, key: str, offset_seconds: float = 0.0,
         "https://generativelanguage.googleapis.com/v1beta/interactions",
         json.dumps(payload).encode(),
         {"x-goog-api-key": key, "Content-Type": "application/json"},
-        timeout=900,
+        timeout=TRANSCRIBE_TIMEOUT,
     )
 
     steps = response.get("steps") or []
@@ -433,6 +442,16 @@ def transcribe_gemini(audio_url: str, language: str) -> list[Word]:
                     reason = "配額 429" if exc.code == 429 else f"HTTP {exc.code}"
                     record("gemini", index, model, False, time.time() - started, reason)
                     if exc.code == 429 and attempt < len(keys) - 1:
+                        continue
+                    raise
+                except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                    # 連線層的錯誤（SSL 交握卡住、逾時、對端斷線）也要換金鑰重試。
+                    # 原本只有 429 會重試，於是一次 SSL 卡住就放棄整個 Gemini
+                    # 退回 Deepgram —— 而 Gemini 的填充詞保留度是它的四倍，
+                    # 為了一次連線問題丟掉那個差異不值得。
+                    record("gemini", index, model, False, time.time() - started,
+                           f"{type(exc).__name__}: {str(exc)[:60]}")
+                    if attempt < len(keys) - 1:
                         continue
                     raise
                 except Exception as exc:

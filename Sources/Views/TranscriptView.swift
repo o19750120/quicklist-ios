@@ -16,6 +16,14 @@ struct TranscriptView: View {
         Group {
             if transcriptModel.hasTranscript {
                 lineList
+                    // 用 safeAreaInset 而不是 overlay：讓逐字稿自己讓出這塊寬度，
+                    // 不然控制條會壓在字上
+                    .safeAreaInset(edge: .trailing, spacing: 0) {
+                        SideAssistant(
+                            interaction: $transcriptModel.interaction,
+                            canLookUpWords: transcriptModel.transcript?.canLookUpWords ?? false
+                        )
+                    }
             } else {
                 emptyState
             }
@@ -93,6 +101,9 @@ struct TranscriptView: View {
         .contentShape(Rectangle())
         .accessibilityIdentifier("transcript.line.\(line.id)")
         .onTapGesture {
+            // 查詞模式下點到詞以外的地方（助詞、標點）不做事 ——
+            // 那時使用者是在讀，不是要跳轉
+            guard transcriptModel.interaction == .playback else { return }
             Task { await seek(to: line) }
         }
         .contextMenu {
@@ -101,6 +112,12 @@ struct TranscriptView: View {
                 logInfo("對齊", "手動指定第 \(line.id + 1) 句，偏移 \(nowPlayingModel.alignmentOffsetMs) ms")
             } label: {
                 Label("現在講的是這句", systemImage: "scope")
+            }
+
+            Button {
+                Task { await seek(to: line) }
+            } label: {
+                Label("從這裡開始播", systemImage: "play.circle")
             }
 
             Button {
@@ -172,6 +189,11 @@ struct TranscriptView: View {
                         span.lemma == nil ? "transcript.token" : "transcript.word.\(line.id).\(index)"
                     )
                     .onTapGesture {
+                        // 播放模式下讓事件落到整列的手勢上，點哪裡都是跳轉
+                        guard transcriptModel.interaction == .lookup else {
+                            Task { await seek(to: line) }
+                            return
+                        }
                         guard let lemma = span.lemma else { return }
                         lookup = WordLookup(
                             word: piece,

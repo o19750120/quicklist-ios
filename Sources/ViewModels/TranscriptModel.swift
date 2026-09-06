@@ -12,6 +12,42 @@ final class TranscriptModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published var showTranslation = true
 
+    /// 點一句話要做什麼。
+    ///
+    /// 兩件事搶同一個手勢：點句子跳到那裡播、點詞查意思。
+    /// 日文的詞佔滿整行，沒有真正的「空白處」可以分流，所以改成明講的模式切換。
+    @Published var interaction: Interaction = .playback
+
+    enum Interaction: String, CaseIterable, Identifiable {
+        /// 點一句就讓 Spotify 跳到那裡
+        case playback
+        /// 點一個詞就查意思
+        case lookup
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .playback: return "播放"
+            case .lookup:   return "查詞"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .playback: return "play.fill"
+            case .lookup:   return "text.magnifyingglass"
+            }
+        }
+
+        var hint: String {
+            switch self {
+            case .playback: return "點一句跳到那裡"
+            case .lookup:   return "點一個詞看意思"
+            }
+        }
+    }
+
     private let service = SupabaseService()
     /// 目前這份逐字稿是哪一集的。外面要拿句數時得先確認是同一集，
     /// 不然換集的瞬間會把上一集的數字算到新的那一集頭上。

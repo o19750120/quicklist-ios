@@ -14,6 +14,11 @@ import XCTest
 ///
 ///     xcrun xcresulttool export attachments \
 ///       --path build/tour.xcresult --output-path build/screens
+/// **不要在逐字稿畫面上枚舉元素。** 一句話拆成一個個可點的詞之後，
+/// 畫面上有七百多個 accessibility 元素，而 XCUITest 查詢元素時每一個都要
+/// 跟 App 來回通訊 —— `allElementsBoundByAccessibilityElement` 會直接跑到超時，
+/// 連 `element(boundBy:)` 逐個取也一樣慢（實測兩次都超過十分鐘沒結束）。
+/// 要驗證逐字稿上的互動，用 `identifier` 指名單一元素，不要搜尋或遍歷。
 final class ScreenTour: XCTestCase {
 
     private var app: XCUIApplication!

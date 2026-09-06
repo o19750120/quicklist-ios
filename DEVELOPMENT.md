@@ -110,6 +110,16 @@ open Kikitori.xcodeproj   # 或直接在 Xcode 裡 ⌘R
 
 這個 UI 測試 target 只在 Mac 上跑，CI 只做 `build` 不做 `test`，不受影響。
 
+**在逐字稿畫面上不要搜尋也不要遍歷元素。** 一句話拆成一個個可點的詞之後，
+畫面上有七百多個 accessibility 元素，而 XCUITest 每查一個都要跟 App 來回通訊：
+`allElementsBoundByAccessibilityElement` 會直接跑到超時，改用
+`element(boundBy:)` 逐個取也一樣（兩種寫法都試過，都超過十分鐘沒結束）。
+要驗證那個畫面上的互動，只能用 `accessibilityIdentifier` 指名單一元素。
+
+還有一個相關的雷：`.accessibilityIdentifier` 加在自訂 `Layout`（例如
+`WordFlowLayout`）裡面的 `Text` 上似乎不會生效，用 identifier 找不到那些詞。
+原因還沒查清楚，先用 `app.scrollViews` 之類的範圍限制繞過。
+
 Spotify 連動在模擬器上一樣能用 —— 它走的是 Web API，
 只要你在別的地方（手機、Spotify 網頁版）播放，模擬器就讀得到。
 

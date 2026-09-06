@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import providers  # noqa: E402
 from find_episode import find_episode  # noqa: E402
 import verify  # noqa: E402
+import vocab  # noqa: E402
 from segment import refine_word_boundaries, resegment, stats  # noqa: E402
 from supabase_client import Supabase  # noqa: E402
 
@@ -36,7 +37,7 @@ log = providers.log
 
 def build(show_name: str, episode_title: str, duration_ms: int | None,
           language: str, translate_to: str,
-          on_stage=None) -> tuple[dict, list[dict], str]:
+          on_stage=None) -> tuple[dict, list[dict], str, dict]:
     # 每個階段都回報一次，App 那頭排隊畫面才看得到進度，不會只有「排隊中」三個字
     def stage(text: str) -> None:
         if on_stage:
@@ -77,12 +78,38 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
     for issue in verify.detect_hallucination(lines):
         log(f"疑似幻覺：{issue}")
 
+    # 上面那道只看得出「文字重複」。幻覺還有一種更安靜的形式：
+    # 在音樂或長靜默處生出**看起來完全正常**的句子，不重複、也通順，
+    # 光看文字發現不了。要抓那種只能回去看音檔有沒有聲音。
+    # ffmpeg 串流讀網址即可，11 分鐘節目 1 秒、40 分鐘 4 秒。
+    for issue in verify.detect_silence_hallucination(words, episode.audio_url):
+        # 括號開頭的是「檢查跑了、結果正常」的回報，不是問題。
+        # 兩種都要印 —— 只印問題的話，分不出檢查通過與檢查沒跑。
+        log(f"靜音檢查{issue}" if issue.startswith("（") else f"靜音處有文字：{issue}")
+
     rows = [line.as_row() for line in lines]
 
     stage(f"翻譯 {len(rows)} 句")
     translations = providers.translate([row["text"] for row in rows], translate_to)
     for row, translated in zip(rows, translations):
         row["translation"] = translated
+
+    # 詞表與詞邊界。純本機計算（Sudachi + 離線字典），不打 API，
+    # 所以放在最後做也不會拖慢什麼，失敗了也不該讓整集報廢 ——
+    # 沒有詞表只是不能點詞查意思，逐字稿本身仍然可用。
+    # 變數不要叫 words —— 那個名字上面是詞級時間戳（segment.Word 清單），
+    # 蓋掉它的話之後在這行後面加任何一道檢查都會拿到錯的東西。
+    stage("建詞表")
+    try:
+        vocabulary = vocab.build(rows)
+        log(f"詞表：{vocab.stats(vocabulary)}")
+    except Exception as exc:
+        vocabulary = {}
+        log(f"建詞表失敗（{exc}），這集先不附詞表")
+
+    # 這一趟打了哪些 API、用了哪幾把金鑰、哪些失敗、為什麼失敗。
+    # 沒有這個的話「為什麼換手」只能用猜的 —— 已經因此誤判過一次。
+    log(providers.call_summary())
 
     episode_row = {
         "show_name": show.name,
@@ -92,7 +119,7 @@ def build(show_name: str, episode_title: str, duration_ms: int | None,
         "duration_ms": int((episode.duration_seconds or 0) * 1000) or duration_ms,
         "language": language,
     }
-    return episode_row, rows, model
+    return episode_row, rows, model, vocabulary
 
 
 def export_env(**values) -> None:
@@ -172,7 +199,7 @@ def main() -> int:
         log(f"翻譯服務可用：{detail}")
 
         mark("running", "準備中")
-        episode_row, lines, model = build(
+        episode_row, lines, model, vocabulary = build(
             show_name, episode_title, duration_ms, args.language, args.translate_to,
             on_stage=lambda text: mark("running", text),
         )
@@ -197,6 +224,7 @@ def main() -> int:
             "source_model": model,
             "language": args.language,
             "translated_to": "zh-TW",
+            "vocab": vocabulary or None,
         }, "episode_id")
 
         mark("done", "完成")

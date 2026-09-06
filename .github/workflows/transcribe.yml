@@ -62,6 +62,31 @@ jobs:
           # 忘了裝不會報錯，只會讓優化在雲端默默失效（ffmpeg 就踩過這個坑）。
           python -m pip install --quiet sudachipy sudachidict_core
           python -c "from sudachipy import Dictionary; Dictionary(dict='core').create(); print('sudachipy 就緒')"
+          # 建離線字典要用（zstd 解壓、簡繁轉換）
+          python -m pip install --quiet zstandard opencc
+
+      # 字典 293 MB，重建一次要下載 115 MB 再花幾分鐘。
+      # 內容只跟 dictionary.py 裡釘死的來源版本有關，所以拿那個檔案的
+      # hash 當快取鍵 —— 換版本才會重建，平常直接取快取。
+      - name: 取用字典快取
+        id: dict-cache
+        uses: actions/cache@v4
+        with:
+          path: backend/data
+          key: jadict-${{ hashFiles('backend/dictionary.py') }}
+
+      - name: 建離線字典
+        if: steps.dict-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          python backend/dictionary.py --build
+
+      - name: 確認字典可用
+        run: |
+          set -euo pipefail
+          # 不要接管線，失敗的退出碼會被吃掉（ffmpeg 就踩過這個坑）。
+          # 沒有字典的話 vocab.build() 會安靜回空的 —— 又是一個靜默失效。
+          python backend/dictionary.py --lookup 市場 --reading シジョウ
 
       - name: 安裝 ffmpeg
         run: |

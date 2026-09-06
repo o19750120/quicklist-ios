@@ -15,6 +15,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from supabase_client import Supabase  # noqa: E402
 
+# 一次 CI 執行最多處理幾集。
+# 限制的原因不是效能，是 GitHub Actions 單次 job 有 6 小時上限，
+# 而 Gemini verbatim 轉錄一集可能要一小時以上（比 Deepgram 慢十倍）。
+# 排隊中的其餘集數會等下一次排程。
 MAX_PER_RUN = 3
 
 

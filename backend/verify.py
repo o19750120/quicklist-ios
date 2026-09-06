@@ -207,6 +207,93 @@ def detect_hallucination(lines: list) -> list[str]:
     return problems
 
 
+def find_silence(source: str, threshold_db: int = -35,
+                 min_seconds: float = 2.0) -> list[tuple[float, float]]:
+    """用 ffmpeg 找出音檔裡真正安靜的區間。
+
+    `detect_hallucination` 只看得出「文字重複」這種徵狀，
+    但幻覺還有一種更安靜的形式：模型在沒有語音的地方生出**看起來正常**
+    的句子，不重複、讀起來也通順，光看文字完全發現不了。
+
+    要抓那種只能回去看音檔。ffmpeg 的 silencedetect 直接給出靜音區間，
+    而且能串流讀網址，不必先下載整個檔案。
+
+    threshold_db 取 -35 而不是預設的 -60：podcast 有底噪與背景音樂，
+    -60 幾乎抓不到東西。min_seconds 取 2 秒是因為句子之間的停頓
+    通常在 1 秒以內，2 秒以上才可能是真的沒人在講話。
+    """
+    process = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-nostats", "-i", source,
+         "-af", f"silencedetect=noise={threshold_db}dB:d={min_seconds}",
+         "-f", "null", "-"],
+        capture_output=True, text=True, errors="replace")
+
+    # 一定要看退出碼。ffmpeg 讀不到檔案時照樣正常結束程序、stderr 也解析得出
+    # 零個區間，跟「這個音檔真的沒有靜音」長得一模一樣。
+    if process.returncode != 0:
+        tail = (process.stderr or "").strip().splitlines()
+        raise RuntimeError(tail[-1] if tail else f"ffmpeg 失敗（{process.returncode}）")
+
+    spans: list[tuple[float, float]] = []
+    start = None
+    for line in process.stderr.splitlines():
+        if "silence_start:" in line:
+            try:
+                start = float(line.split("silence_start:")[1].split()[0])
+            except (ValueError, IndexError):
+                start = None
+        elif "silence_end:" in line and start is not None:
+            try:
+                end = float(line.split("silence_end:")[1].split()[0])
+                spans.append((start, end))
+            except (ValueError, IndexError):
+                pass
+            start = None
+    return spans
+
+
+def detect_silence_hallucination(words: list[Word], source: str,
+                                 min_chars: int = 8) -> list[str]:
+    """找出落在靜音區間裡的文字 —— 那是模型憑空生出來的。
+
+    回傳可讀的問題描述。抓不到靜音（ffmpeg 不在、網址讀不了）就回空的，
+    不要讓這道檢查的失敗變成整集失敗。
+
+    只報告連續 min_chars 字以上的，因為靜音邊界本來就會有一兩個字
+    的誤差 —— 一句話的尾音落進靜音區間是正常的。
+    """
+    if not words:
+        return []
+    try:
+        spans = find_silence(source)
+    except Exception as exc:
+        # 回空的會跟「檢查過沒問題」長得一模一樣。ffmpeg 沒裝、網址讀不了
+        # 都會走到這裡，而那正是最該知道的事 —— 這個專案已經因為
+        # 「ffmpeg 沒裝但沒人發現」吃過一次虧了。
+        return [f"（靜音檢查沒跑成：{exc}）"]
+    if not spans:
+        return ["（音檔沒有 2 秒以上的靜音，這道檢查沒有東西可查）"]
+
+    problems: list[str] = []
+    for begin, end in spans:
+        # 兩端各留 0.5 秒，避免把正常的句尾尾音算進去
+        inside = [w for w in words
+                  if w.start >= begin + 0.5 and w.end <= end - 0.5]
+        text = "".join(w.text for w in inside)
+        if len(text) >= min_chars:
+            problems.append(
+                f"{begin:.0f}–{end:.0f} 秒是靜音，卻有 {len(text)} 個字："
+                f"「{text[:30]}」")
+
+    total = sum(e - b for b, e in spans)
+    summary = f"音檔有 {len(spans)} 段靜音（共 {total/60:.1f} 分）"
+    if not problems:
+        # 沒問題也要說一聲，否則分不出「檢查通過」與「檢查沒跑」
+        return [f"（{summary}，都沒有文字，正常）"]
+    problems.insert(0, f"{summary}，其中 {len(problems)} 段出現了文字")
+    return problems
+
+
 def as_dict(report: Report) -> dict:
     return {
         "ok": report.ok,

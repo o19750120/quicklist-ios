@@ -26,6 +26,17 @@ create table if not exists public.kikitori_transcripts (
     source_model    text,
     language        text,
     translated_to   text,
+    -- 該集的詞表與詞邊界，由 backend/vocab.py 在轉錄時預先建好。
+    -- 長這樣：{"vocab": {"市場": {"r":"しじょう","zh":[...],"en":[...]}},
+    --          "tokens": [[[0,2,"市場"],[2,3,null],...], ...]}
+    --
+    -- 放在這裡而不是給 App 一本字典，有三個理由：
+    -- 日文沒有空格，App 沒辦法自己斷詞（要形態素解析）；
+    -- 完整字典 293 MB，綁進 App 太大、進 Supabase 會吃掉免費額度；
+    -- 同形異讀要靠語境挑（市場 しじょう vs いちば），那只有轉錄當下才有。
+    --
+    -- 可為 null —— 舊資料沒有這個欄位，App 要當作「這集還沒有詞表」處理。
+    vocab           jsonb,
     created_at      timestamptz not null default now(),
     unique (episode_id)
 );

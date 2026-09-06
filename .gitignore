@@ -20,3 +20,6 @@ dist/
 # Python
 __pycache__/
 *.pyc
+
+# 字典資料，跑 backend/dictionary.py --build 重建（170 MB，不進版控）
+backend/data/

@@ -31,8 +31,39 @@ env.load()
 
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Kikitori/0.1"
 
+# 轉錄模型不能照翻譯那樣「有什麼用什麼」。
+#
+# 翻譯換個同級模型，輸出差異小；轉錄換一個，出來的東西根本不是同一件事 ——
+# 填充詞會不會被吃掉、有沒有詞級時間戳、多語言混講會不會硬拼成假名，
+# 每一項都是選這幾個模型的理由，而且都是實測比出來的（見下面各家的註解）。
+#
+# 所以這裡是**驗證過的候選清單**，執行時確認「這幾個之中還活著哪一個」，
+# 而不是從服務商的全部模型裡隨便挑一個。全部都不在了就明確報錯換下一家，
+# 不要靜默降級成品質未知的模型。
+#
+# 要往清單裡加新模型之前，先跑 backend/benchmark.py 量過 CER 與填充詞保留數。
+GEMINI_TRANSCRIBE_PREFERENCE = ["gemini-3.5-transcribe"]
+GROQ_TRANSCRIBE_PREFERENCE = ["whisper-large-v3", "whisper-large-v3-turbo"]
+
+# Deepgram 沒有列出模型的 API，只能寫死。下架的話會在呼叫時 400，
+# 那時 transcribe() 會記錄原因並換下一家 —— 不會靜默。
 DEEPGRAM_MODEL = "nova-3"
-WHISPER_MODEL = "whisper-large-v3"
+
+# 節目裡可能出現的語言。Gemini 一定要顯式列出（理由見 _gemini_transcribe_clip）。
+#
+# **只放兩種，不要再加。** 試過把中文加進來（中日雙語的學習節目很常見），
+# 結果更糟 —— Gemini 不是「多語言一起處理」，而是**挑一個主導語言、其餘丟掉**。
+# 同一段 50 秒的中日混講實測：
+#
+#     ja-JP + en-US                     123 詞，涵蓋 49.9/50 秒，日文完整
+#     ja-JP + en-US + zh-TW             117 詞，涵蓋 41.3 秒
+#     ja-JP + en-US + cmn-Hans-CN        65 詞，涵蓋 26.9 秒
+#     ja-JP + en-US + zh-TW + cmn-Hans   64 詞，**日文全丟了，只剩中文**
+#
+# 最後一種正好是最糟的：使用者要學的是日文。
+# 中文段落轉不好是可以接受的代價（使用者本來就懂中文），
+# 日文被丟掉不行。
+LANGUAGE_CODES = ["ja-JP", "en-US"]
 # 不寫死模型名稱 —— 服務商一下架就會靜默失敗。
 # 實際上就發生過：llama-3.3-70b-versatile 被 Groq 下架，
 # 翻譯整條斷掉但錯誤被吞掉，逐字稿照樣產出，只是整份沒有翻譯。
@@ -46,21 +77,73 @@ GEMINI_MODEL_PREFERENCE = [
     "gemini-2.5-flash",
 ]
 GROQ_MODEL_PREFERENCE = [
-    "openai/gpt-oss-120b",
+    # qwen 排前面：實測它們的 reasoning_effort 吃 "none"，推理 token 真的是 0；
+    # gpt-oss 最低只到 "low"，關不掉，每次還是會燒 70 個推理 token。
     "qwen/qwen3.8-27b",
     "qwen/qwen3.6-27b",
+    "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
+    # groq/compound 放最後：它不遵守 response_format 的 json_object
+    # （會回散文），而且實測連短提示都回 413。留著只是當最後的救命稻草。
     "groq/compound",
 ]
 
 _model_cache: dict[str, str | None] = {}
 
+# 一次送幾句去翻譯。太小則往返次數暴增（一集上千句），
+# 太大則單次輸出被截斷、而且一批失敗會連累很多句。
 TRANSLATE_BATCH = 40
+# Whisper 備援切段長度。Groq 單檔上限 25MB，
+# 壓成 16kHz 單聲道 48kbps 之後 15 分鐘約 5.4MB，留了很大餘裕 ——
+# 因為切段是為了不撞上限，不是為了塞滿。
 SEGMENT_SECONDS = 900
 
 
 def log(message: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
+
+
+# 每一次 API 呼叫的紀錄：哪一把金鑰、哪個模型、成功與否、花多久、錯在哪。
+#
+# 加這個是因為踩過一次：一集轉錄退回了 Deepgram，我判斷是「撞到配額」，
+# 但那是推論不是證據 —— 真正的原因是涵蓋檢查沒過。沒有逐次紀錄的話，
+# 「為什麼換手」只能用猜的，而猜錯會把力氣花在不存在的問題上。
+#
+# 金鑰只記索引不記內容。
+CALLS: list[dict] = []
+
+
+def record(provider: str, key_index: int, model: str, ok: bool,
+           seconds: float, error: str = "") -> None:
+    CALLS.append({"provider": provider, "key": key_index, "model": model,
+                  "ok": ok, "seconds": round(seconds, 1), "error": error[:120]})
+
+
+def call_summary() -> str:
+    """把這一趟所有 API 呼叫整理成一段可讀的報告。"""
+    if not CALLS:
+        return "這一趟沒有打過任何 API"
+
+    lines = [f"API 呼叫共 {len(CALLS)} 次："]
+    groups: dict[tuple, list[dict]] = {}
+    for call in CALLS:
+        groups.setdefault((call["provider"], call["model"]), []).append(call)
+
+    for (provider, model), items in groups.items():
+        ok = [c for c in items if c["ok"]]
+        bad = [c for c in items if not c["ok"]]
+        used = sorted({c["key"] for c in items})
+        total = sum(c["seconds"] for c in items)
+        lines.append(
+            f"  {provider}/{model}：{len(ok)} 成功 {len(bad)} 失敗，"
+            f"用了金鑰 {used}，共 {total:.0f} 秒")
+        # 失敗的原因要看得到，而且要分得出配額、格式錯誤還是別的
+        reasons: dict[str, int] = {}
+        for c in bad:
+            reasons[c["error"]] = reasons.get(c["error"], 0) + 1
+        for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1])[:3]:
+            lines.append(f"      失敗 ×{count}：{reason}")
+    return "\n".join(lines)
 
 
 def _keys(name: str) -> list[str]:
@@ -139,7 +222,6 @@ def transcribe_deepgram(audio_url: str, language: str) -> list[Word]:
     ]
 
 
-GEMINI_TRANSCRIBE_MODEL = "gemini-3.5-transcribe"
 # 開詞級時間戳之後的實測邊界：31 分以內乾淨，35 分開始有 annotation 缺尾，
 # 45 分時間戳出現鬼值，55 分只轉到 63%，60 分直接 400。
 # 留一點餘裕切在 28 分。
@@ -153,7 +235,8 @@ def _parse_offset(value: str | None) -> float:
     return float(str(value).rstrip("s") or 0)
 
 
-def _gemini_transcribe_clip(path: Path, key: str, offset_seconds: float = 0.0) -> list[Word]:
+def _gemini_transcribe_clip(path: Path, key: str, offset_seconds: float = 0.0,
+                            model: str | None = None) -> list[Word]:
     """把一段音檔送去 gemini-3.5-transcribe。
 
     詞級時間戳只有 /v1beta/interactions 端點支援，
@@ -167,7 +250,7 @@ def _gemini_transcribe_clip(path: Path, key: str, offset_seconds: float = 0.0) -
     import base64
 
     payload = {
-        "model": GEMINI_TRANSCRIBE_MODEL,
+        "model": model or GEMINI_TRANSCRIBE_PREFERENCE[0],
         "input": [{
             "type": "audio",
             "data": base64.b64encode(path.read_bytes()).decode(),
@@ -193,7 +276,13 @@ def _gemini_transcribe_clip(path: Path, key: str, offset_seconds: float = 0.0) -
             # 硬拼成假名（垃圾但看得出來），Gemini 是直接沒有那些詞，
             # 但因為日文段落跨在前後，涵蓋率仍然顯示 99.8%。
             # 光看 coverage 這個失敗是隱形的，一定要靠 verify 的空白比例才抓得到。
-            "language_codes": ["ja-JP", "en-US"],
+            #
+            # 中文也一定要列進來。這支 App 的使用者是台灣人，會聽的
+            # 有一大類是「中文母語者學日文」的雙語節目 —— 少了中文，
+            # 那些段落會被硬轉成日文假名，產出
+            # 「hello但是好徐理是理붴를세요。」這種垃圾，跟當初少了英文時
+            # 一模一樣（實測 EP45 那集有 5% 的句子整句是這種東西）。
+            "language_codes": LANGUAGE_CODES,
         }},
     }
 
@@ -280,6 +369,15 @@ def transcribe_gemini(audio_url: str, language: str) -> list[Word]:
     if not keys:
         raise RuntimeError("沒有 GEMINI_API_KEYS")
 
+    model = transcribe_model("gemini", keys)
+    if not model:
+        raise RuntimeError(
+            "Gemini 的轉錄模型都不在了："
+            + "、".join(GEMINI_TRANSCRIBE_PREFERENCE)
+            + "。要換模型請先跑 benchmark.py 量過品質再加進 "
+              "GEMINI_TRANSCRIBE_PREFERENCE")
+    log(f"Gemini 轉錄（{model}）")
+
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
         log("下載音檔")
@@ -321,14 +419,25 @@ def transcribe_gemini(audio_url: str, language: str) -> list[Word]:
             # 幾秒到幾十秒後才恢復。撞到就換下一把金鑰，
             # 手上有幾把就等於同時有幾個水桶。
             for attempt in range(len(keys)):
-                key = keys[(cursor + attempt) % len(keys)]
+                index = (cursor + attempt) % len(keys)
+                key = keys[index]
+                started = time.time()
                 try:
-                    words.extend(_gemini_transcribe_clip(part, key, offset))
+                    words.extend(_gemini_transcribe_clip(part, key, offset, model))
+                    record("gemini", index, model, True, time.time() - started)
                     cursor = (cursor + attempt + 1) % len(keys)
                     break
                 except urllib.error.HTTPError as exc:
+                    # 429 才是配額，其他 HTTP 錯誤是別的問題 —— 分開記，
+                    # 不然「為什麼換手」又只能用猜的
+                    reason = "配額 429" if exc.code == 429 else f"HTTP {exc.code}"
+                    record("gemini", index, model, False, time.time() - started, reason)
                     if exc.code == 429 and attempt < len(keys) - 1:
                         continue
+                    raise
+                except Exception as exc:
+                    record("gemini", index, model, False, time.time() - started,
+                           f"{type(exc).__name__}: {exc}")
                     raise
             offset += duration
 
@@ -353,10 +462,10 @@ def _probe_duration(path: Path) -> float:
     return float(result.stdout.strip())
 
 
-def _whisper_one(path: Path, language: str, key: str) -> list[dict]:
+def _whisper_one(path: Path, language: str, key: str, model: str) -> list[dict]:
     boundary = "----KikitoriBoundary7MA4YWxkTrZu0gW"
     fields = {
-        "model": WHISPER_MODEL,
+        "model": model,
         "response_format": "verbose_json",
         "timestamp_granularities[]": "word",
     }
@@ -387,6 +496,13 @@ def transcribe_groq(audio_url: str, language: str) -> list[Word]:
     keys = _keys("GROQ_API_KEYS")
     if not keys:
         raise RuntimeError("沒有 GROQ_API_KEYS")
+
+    model = transcribe_model("groq", keys)
+    if not model:
+        raise RuntimeError(
+            "Groq 的 Whisper 模型都不在了："
+            + "、".join(GROQ_TRANSCRIBE_PREFERENCE))
+    log(f"Whisper 轉錄（{model}）")
 
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
@@ -422,7 +538,7 @@ def transcribe_groq(audio_url: str, language: str) -> list[Word]:
             log(f"Whisper 第 {index+1}/{len(parts)} 段")
             # 切段時間軸要用實際長度累加，用固定值推算會愈後面愈歪
             duration = _probe_duration(part)
-            raw_words = _whisper_one(part, language, keys[index % len(keys)])
+            raw_words = _whisper_one(part, language, keys[index % len(keys)], model)
             for item in raw_words:
                 text = (item.get("word") or item.get("text") or "").strip()
                 if not text:
@@ -455,9 +571,9 @@ def transcribe(audio_url: str, language: str,
     # 學習者要聽懂真實對話靠的就是這些。代價是慢十倍，值得。
     # 撞到配額或長度限制時，後面兩家仍然可用。
     attempts = (
-        (f"gemini:{GEMINI_TRANSCRIBE_MODEL}", lambda: transcribe_gemini(audio_url, language)),
-        (f"deepgram:{DEEPGRAM_MODEL}", lambda: transcribe_deepgram(audio_url, language)),
-        (f"groq:{WHISPER_MODEL}", lambda: transcribe_groq(audio_url, language)),
+        ("gemini", lambda: transcribe_gemini(audio_url, language)),
+        ("deepgram", lambda: transcribe_deepgram(audio_url, language)),
+        ("groq", lambda: transcribe_groq(audio_url, language)),
     )
 
     last_error: str | None = None
@@ -478,7 +594,11 @@ def transcribe(audio_url: str, language: str,
                 continue
             log(f"{name} 涵蓋檢查通過（{report.coverage_ratio*100:.1f}%）")
 
-        return words, name
+        # 記下實際用到的模型，不只是哪一家 —— 之後回頭查某一集品質為什麼
+        # 特別差時，要分得出是哪個模型轉的。模型名稱是執行時才解析出來的，
+        # 所以到這裡才組。
+        used = DEEPGRAM_MODEL if name == "deepgram" else _transcribe_cache.get(name)
+        return words, f"{name}:{used}" if used else name
 
     raise RuntimeError(f"所有轉錄服務都不可用或結果不完整：{last_error}")
 
@@ -507,15 +627,54 @@ def _get(url: str, headers: dict, timeout: int = 30):
         return json.loads(response.read())
 
 
-def _list_models(provider: str, key: str) -> set[str]:
+def _list_models(provider: str, key: str, chat_only: bool = True) -> set[str]:
+    """服務商目前有的模型。
+
+    chat_only 只影響 Gemini：轉錄模型走 /v1beta/interactions，
+    不支援 generateContent，所以查轉錄模型時不能套那個過濾條件，
+    否則永遠找不到自己要的那個。
+    """
     if provider == "gemini":
         payload = _get(
             f"https://generativelanguage.googleapis.com/v1beta/models?key={key}&pageSize=200", {}
         )
         return {m["name"].replace("models/", "") for m in payload.get("models", [])
-                if "generateContent" in m.get("supportedGenerationMethods", [])}
+                if not chat_only
+                or "generateContent" in m.get("supportedGenerationMethods", [])}
     payload = _get("https://api.groq.com/openai/v1/models", {"Authorization": f"Bearer {key}"})
     return {m["id"] for m in payload.get("data", [])}
+
+
+_transcribe_cache: dict[str, str | None] = {}
+
+
+def transcribe_model(provider: str, keys: list[str]) -> str | None:
+    """挑一個還活著的轉錄模型，只從驗證過的候選清單裡挑。
+
+    回 None 代表清單裡的模型全都不在了 —— 呼叫端要據此換下一家，
+    不要退而求其次拿沒量過品質的模型硬上。上次 Groq 下架
+    llama-3.3-70b-versatile 時翻譯整條靜默斷掉，就是因為沒有這一步。
+    """
+    if provider in _transcribe_cache:
+        return _transcribe_cache[provider]
+
+    preference = (GEMINI_TRANSCRIBE_PREFERENCE if provider == "gemini"
+                  else GROQ_TRANSCRIBE_PREFERENCE)
+    chosen = None
+    for key in keys:
+        try:
+            existing = _list_models(provider, key, chat_only=False)
+        except Exception:
+            continue
+        chosen = next((m for m in preference if m in existing), None)
+        if chosen:
+            break
+        # 問得到清單但候選一個都不在 —— 這是要知道的事，不是可以忽略的事
+        log(f"{provider} 的轉錄模型都不在了（找過 {', '.join(preference)}）")
+        break
+
+    _transcribe_cache[provider] = chosen
+    return chosen
 
 
 def available_models(provider: str, keys: list[str]) -> list[str]:
@@ -556,40 +715,185 @@ def pick_model(provider: str, keys: list[str]) -> str | None:
     return models[0] if models else None
 
 
+# 關掉思考的寫法，依序試。**兩種語法是互補的，不是二選一。**
+#
+# 實測（看 usageMetadata.thoughtsTokenCount，那才是真的有沒有在思考）：
+#
+#     模型                    thinkingBudget:0   thinkingLevel:MINIMAL
+#     gemini-3.7-flash        關掉               400
+#     gemini-3.5-flash        關掉               關掉
+#     gemini-2.5-flash        關掉               400
+#     gemini-3.6-flash        **400**            **關掉**
+#     gemini-3.1-flash-lite   關掉（本來就不思考）  關掉
+#
+# 所以 3.6 只吃 level、2.5 只吃 budget。寫死任一種都會有模型漏掉，
+# 而漏掉的後果是它**默默開著思考跑**（3.6 實測燒 799 個思考 token
+# 才產出幾十個字的翻譯）—— 那是使用者明確要求關掉的東西。
+#
+# 順序有意義：budget 支援的模型比較多，先試它。
+#
+# 官方文件補充了實測沒涵蓋的部分：Gemini 3 世代改用 thinkingLevel（字串），
+# 2.5 世代才用 thinkingBudget（數字），而且**兩個不能同時傳，會 400**。
+# 各模型能接受的最低等級也不一樣：3.6／3.5 有 minimal，3.8／3.7 最低只到 low。
+#
+# 所以順序是「最省的先試」：minimal → low → budget=0 → 放棄。
+_THINKING_OFF = [
+    {"thinkingLevel": "MINIMAL"},   # 3.6 / 3.5 / flash-lite 支援
+    {"thinkingLevel": "LOW"},       # 3.8 / 3.7 最低只到這裡
+    {"thinkingBudget": 0},          # 2.5 世代（3.x 傳這個有的會 400）
+]
+
+# 每個模型實際能用哪一種，執行時試出來記住。不寫死名稱 ——
+# 關思考的語法每一代都在變（Gemini 3 已經不吃舊的寫法），清單一定會過期。
+_THINKING_CONFIG: dict[str, dict | None] = {}
+
+
+def thinking_candidates(model: str) -> list[dict | None]:
+    """這個模型要依序試哪些「關掉思考」的寫法。
+
+    已經試出來過就只回那一種，沒試過就回全部候選再加上 None（放棄）。
+    給 vocab.verify_readings 之類的其他呼叫端共用 —— 每個地方各自寫死
+    一種語法的話，總會有地方漏掉，而漏掉的後果是默默開著思考跑。
+    """
+    if model in _THINKING_CONFIG:
+        return [_THINKING_CONFIG[model]]
+    return [*_THINKING_OFF, None]
+
+
+def remember_thinking(model: str, config: dict | None) -> None:
+    """記住這個模型能用的寫法。config 是 None 代表關不掉。"""
+    if model not in _THINKING_CONFIG:
+        _THINKING_CONFIG[model] = config
+        if config is None:
+            log(f"⚠ {model} 沒有任何一種寫法能關掉思考，這個模型會開著思考跑")
+
+
+def check_thinking(model: str, payload: dict) -> None:
+    """回應裡若還有思考 token，就是沒關成功 —— 要講出來，不要靜默。"""
+    used = (payload.get("usageMetadata") or {}).get("thoughtsTokenCount") or 0
+    if used:
+        log(f"⚠ {model} 思考模式沒關成功，這次燒了 {used} 個思考 token")
+
+
 def _gemini_batch(prompt: str, key: str, model: str) -> str:
-    payload = _post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
-        json.dumps({
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "temperature": 0.2,
-                # 翻譯不需要推理。實測 gemini-3.8-flash 預設會花 387 tokens 思考
-                # 才產出 36 tokens 的答案 —— 九成額度燒在沒用的地方，速度也慢一倍。
-                # 注意 Gemini 3 系列不吃 thinkingLevel: MINIMAL，thinkingBudget 才有效。
-                "thinkingConfig": {"thinkingBudget": 0},
-            },
-        }).encode(),
-        {"Content-Type": "application/json"},
-        timeout=600,
-    )
+    """送一批文字給 Gemini，並確保思考模式是關的。
+
+    翻譯不需要推理。實測 gemini-3.8-flash 預設會花 387 tokens 思考
+    才產出 36 tokens 的答案 —— 九成額度燒在沒用的地方，速度也慢一倍。
+    """
+    def send(thinking: dict | None):
+        config = {"responseMimeType": "application/json", "temperature": 0.2}
+        if thinking is not None:
+            config["thinkingConfig"] = thinking
+        return _post(
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={key}",
+            json.dumps({"contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": config}).encode(),
+            {"Content-Type": "application/json"},
+            timeout=600,
+        )
+
+    payload = None
+    for candidate in thinking_candidates(model):
+        try:
+            payload = send(candidate)
+            remember_thinking(model, candidate)
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code != 400:
+                raise
+    if payload is None:
+        raise RuntimeError(f"{model} 每一種請求寫法都被拒絕")
+
+    check_thinking(model, payload)
     return payload["candidates"][0]["content"]["parts"][0]["text"]
 
 
+# Groq 這邊的「關掉推理」候選，跟 Gemini 一樣依序試。
+#
+# 實測（數字是 usage.completion_tokens_details.reasoning_tokens）：
+#
+#     模型                  不送參數   reasoning_effort:"low"
+#     openai/gpt-oss-120b   279       25
+#     openai/gpt-oss-20b    327        9
+#     qwen/qwen3.6-27b      1303      **400**
+#     groq/compound         沒有推理   **400**
+#
+# 所以寫死 "low" 會讓 qwen3.6 與 compound **永遠失敗** ——
+# 五個偏好模型裡兩個掛掉，而且失敗訊息被上層吞成「這個模型不通」，
+# 看起來像模型有問題，其實是我們送錯參數。
+# 另外實測 "none" / "default" / "minimal" 全部 400，Groq 只認 low/medium/high。
+#
+# 官方文件：qwen 系列吃 "none"（qwen3.8 預設就是 none），
+# gpt-oss 只吃 low/medium/high、最低只到 low、關不掉。
+# 所以順序是 none → low → 不送參數。
+# 注意 reasoning_format:"hidden" 只是不回傳推理內容，token 照樣算錢，不是關閉。
+_REASONING_OFF: list[dict] = [
+    {"reasoning_effort": "none"},   # qwen 系列
+    {"reasoning_effort": "low"},    # gpt-oss 系列的最低值
+    {},                             # 都不接受就不送（推理會開著，會印警告）
+]
+_REASONING_CONFIG: dict[str, dict] = {}
+# 關不掉的模型記一次，免得每次呼叫都洗版
+_REASONING_FLOOR: dict[str, int] = {}
+
+# 哪些（模型, 金鑰）組合是 404。不同金鑰能用的模型不一樣 ——
+# 實測 gemini-2.5-flash-lite 在八把金鑰裡只有三把有，其餘回 404。
+# 404 在同一次執行內不會變，記起來就不用每批都重撞一次
+# （實測一集浪費 9 次呼叫）。
+_MISSING: set[tuple[str, int]] = set()
+
+
+def is_missing(model: str, key_index: int) -> bool:
+    return (model, key_index) in _MISSING
+
+
+def mark_missing(model: str, key_index: int) -> None:
+    _MISSING.add((model, key_index))
+
+
 def _groq_batch(prompt: str, key: str, model: str) -> str:
-    payload = _post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        json.dumps({
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2,
-            "response_format": {"type": "json_object"},
-            # 同理。Groq 只接受 low / medium / high，沒有完全關閉的選項。
-            "reasoning_effort": "low",
-        }).encode(),
-        {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        timeout=600,
-    )
+    def send(extra: dict):
+        return _post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            json.dumps({
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "response_format": {"type": "json_object"},
+                **extra,
+            }).encode(),
+            {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            timeout=600,
+        )
+
+    candidates = ([_REASONING_CONFIG[model]] if model in _REASONING_CONFIG
+                  else _REASONING_OFF)
+    payload = None
+    for candidate in candidates:
+        try:
+            payload = send(candidate)
+            _REASONING_CONFIG.setdefault(model, candidate)
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code != 400:
+                raise
+    if payload is None:
+        raise RuntimeError(f"{model} 每一種請求寫法都被拒絕")
+
+    used = ((payload.get("usage") or {})
+            .get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
+    # 有些模型本來就關不掉：官方文件寫明 gpt-oss 系列的 reasoning_effort
+    # 最低只到 low，沒有 none。所以「還有推理 token」不一定是設定沒生效。
+    #
+    # 但這件事一定要講出來（使用者要求關掉思考），只是每個模型講一次就好，
+    # 不要每次呼叫都洗版。
+    if used > 50 and model not in _REASONING_FLOOR:
+        _REASONING_FLOOR[model] = used
+        setting = _REASONING_CONFIG.get(model) or "沒送參數"
+        log(f"{model} 用了 {setting} 仍有 {used} 個推理 token —— "
+            f"這是這個模型的下限，關不掉")
     return payload["choices"][0]["message"]["content"]
 
 
@@ -643,17 +947,25 @@ def _translate_once(lines: list[str], target: str) -> tuple[list[str] | None, li
 
         for index, key in enumerate(keys, 1):
             for model in models:
+                started = time.time()
                 try:
                     parsed = json.loads(caller(prompt, key, model))
                     result = [str(parsed.get(str(i), "")) for i in range(len(lines))]
                     if any(result):
+                        record(provider, index, model, True, time.time() - started)
                         return result, failures
+                    record(provider, index, model, False, time.time() - started, "回應是空的")
                     failures.append(f"{provider}#{index}/{model} 回應是空的")
                 except urllib.error.HTTPError as exc:
-                    failures.append(f"{provider}#{index}/{model} HTTP {exc.code}")
+                    reason = "配額 429" if exc.code == 429 else f"HTTP {exc.code}"
+                    record(provider, index, model, False, time.time() - started, reason)
+                    failures.append(f"{provider}#{index}/{model} {reason}")
                 except json.JSONDecodeError:
+                    record(provider, index, model, False, time.time() - started, "回應不是 JSON")
                     failures.append(f"{provider}#{index}/{model} 回應不是 JSON")
                 except Exception as exc:
+                    record(provider, index, model, False, time.time() - started,
+                           f"{type(exc).__name__}: {exc}")
                     failures.append(f"{provider}#{index}/{model} {type(exc).__name__}")
 
     return None, failures

@@ -27,10 +27,10 @@ struct NowPlayingView: View {
                             notAPodcast
                         }
                     }
-                    // 資訊列浮在內容上方，逐字稿從它底下捲過去。
-                    // 用一條分隔線把畫面切成上下兩塊是比較舊的做法；
-                    // iOS 26 之後系統自己也是這種半透明浮層的層次。
-                    .safeAreaInset(edge: .top, spacing: 0) {
+                    // 正在播放的資訊放在底部，像音樂 App 的 mini player。
+                    // 逐字稿因此從畫面最上面就開始，閱讀的那一段不被切掉；
+                    // 進度與集名放在拇指旁邊，要看的時候低頭就有。
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
                         header(playing)
                             .background(.ultraThinMaterial)
                     }

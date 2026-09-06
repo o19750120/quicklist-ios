@@ -165,10 +165,20 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--logs", type=int, default=15)
     parser.add_argument("--errors", action="store_true")
+    parser.add_argument("--has-queued", action="store_true",
+                        help="只回答有沒有排隊中的任務（退出碼 0 = 有），給 CI 用")
     args = parser.parse_args()
 
     env.require("SUPABASE_URL", "SUPABASE_SERVICE_KEY")
     db = Supabase()
+
+    if args.has_queued:
+        # CI 的排程每 15 分鐘跑一次，但多數時候沒事做。
+        # 有這個才能跳過字典（293 MB）與 ffmpeg 的準備 ——
+        # 不然一天會白白搬 28 GB 的快取。
+        rows = db.select("kikitori_jobs", "select=id&status=in.(queued,running)&limit=1")
+        print(f"排隊中的任務：{len(rows)}")
+        return 0 if rows else 1
 
     show_jobs(db)
     show_transcripts(db)

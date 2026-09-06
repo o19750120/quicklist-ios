@@ -65,23 +65,40 @@ jobs:
           # 建離線字典要用（zstd 解壓、簡繁轉換）
           python -m pip install --quiet zstandard opencc
 
+      # 排程每 15 分鐘跑一次，但多數時候沒有工作。字典有 293 MB，
+      # 每次都還原快取等於一天搬 28 GB —— 所以先確認真的有事要做。
+      - name: 有沒有工作要做
+        id: work
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "yes=true" >> "$GITHUB_OUTPUT"       # 手動或資料庫叫醒，一定有事
+          elif python backend/status.py --has-queued; then
+            echo "yes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "yes=false" >> "$GITHUB_OUTPUT"
+            echo "沒有排隊中的任務，跳過字典與 ffmpeg 的準備"
+          fi
+
       # 字典 293 MB，重建一次要下載 115 MB 再花幾分鐘。
       # 內容只跟 dictionary.py 裡釘死的來源版本有關，所以拿那個檔案的
       # hash 當快取鍵 —— 換版本才會重建，平常直接取快取。
       - name: 取用字典快取
         id: dict-cache
+        if: steps.work.outputs.yes == 'true'
         uses: actions/cache@v4
         with:
           path: backend/data
           key: jadict-${{ hashFiles('backend/dictionary.py') }}
 
       - name: 建離線字典
-        if: steps.dict-cache.outputs.cache-hit != 'true'
+        if: steps.work.outputs.yes == 'true' && steps.dict-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           python backend/dictionary.py --build
 
       - name: 確認字典可用
+        if: steps.work.outputs.yes == 'true'
         run: |
           set -euo pipefail
           # 不要接管線，失敗的退出碼會被吃掉（ffmpeg 就踩過這個坑）。
@@ -89,6 +106,7 @@ jobs:
           python backend/dictionary.py --lookup 市場 --reading シジョウ
 
       - name: 安裝 ffmpeg
+        if: steps.work.outputs.yes == 'true'
         run: |
           # runner 沒有預裝。缺了它有兩個後果，而且都是靜默的：
           # 涵蓋檢查量不到音檔長度會自己跳過，Whisper 備援也壓縮不了音檔。
@@ -99,11 +117,19 @@ jobs:
         run: |
           set -euo pipefail
           python --version
+          echo "觸發方式：${{ github.event_name }}"
+          echo "有工作要做：${{ steps.work.outputs.yes }}"
+
+      # ffmpeg 是條件安裝的，所以驗證也要同一個條件 ——
+      # 不然沒工作的那些排程會因為 ffmpeg 不在而整個失敗。
+      - name: 確認 ffmpeg 可用
+        if: steps.work.outputs.yes == 'true'
+        run: |
+          set -euo pipefail
           # 不要接管線，不然指令失敗會被 head 的退出碼蓋掉，
           # 這正是先前 ffmpeg 沒裝卻沒人發現的原因
           ffmpeg -version | head -1
           ffprobe -version | head -1
-          echo "觸發方式：${{ github.event_name }}"
 
       - name: 手動指定的單集
         if: github.event_name == 'workflow_dispatch' && inputs.show != ''

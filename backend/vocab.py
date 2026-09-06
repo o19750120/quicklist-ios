@@ -122,6 +122,10 @@ def verify_readings(cases: list[dict]) -> dict[int, str]:
     # `providers.call_summary()` 的逐次紀錄，不要用猜的。
     keys = list(reversed(providers._keys("GEMINI_API_KEYS")))
     if not keys:
+        # 講出來。安靜回空的話，CI 少設一個環境變數就會讓假名覆核
+        # 整個不執行而沒人知道 —— 這個專案已經因為
+        # 「ffmpeg 沒裝但沒人發現」吃過一次虧了。
+        providers.log("沒有 GEMINI_API_KEYS，跳過讀音覆核（假名照 Sudachi 標）")
         return {}
 
     schema = {"type": "object", "properties": {"r": {"type": "array", "items": {

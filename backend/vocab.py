@@ -290,8 +290,12 @@ def build(lines: list[dict], db_path: Path | None = None,
 
                 lemma = token.dictionary_form()
                 # 查字典用原形的讀音，標假名用表面形的（見 _lemma_reading）
+                # normalized_form 是最強的線索：Sudachi 會把「いる」正規化成
+                # 「居る」、「すごい」正規化成「凄い」。純假名的高頻詞
+                # （いう／いる／こと）讀音與詞性都分不出來，只有這個分得出。
                 entry = dictionary.lookup(lemma, _lemma_reading(tokenizer, token),
-                                          token.part_of_speech()[0])
+                                          token.part_of_speech()[0],
+                                          token.normalized_form())
                 span = [index, cursor, lemma if entry else None]
                 spans.append(span)
 

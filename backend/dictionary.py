@@ -101,6 +101,11 @@ _POS_TO_JMDICT = {
 }
 
 
+def _has_misc(entry: dict, tags: tuple) -> bool:
+    """條目的任何一個義項帶這些 JMdict 標記嗎。"""
+    return any(m in tags for sense in entry["senses"] for m in sense.get("misc", []))
+
+
 def _pos_matches(entry: dict, sudachi_pos: str) -> bool:
     """這個條目的詞性跟 Sudachi 判斷的一致嗎。"""
     wanted = _POS_TO_JMDICT.get(sudachi_pos)
@@ -114,18 +119,30 @@ def to_hiragana(text: str) -> str:
     return (text or "").translate(_KATA_TO_HIRA)
 
 
-def reading_signature(readings) -> str:
-    """把一個條目的讀音組合成指紋，用來跨資料來源認出同一個條目。
+def entry_keys(kanji, readings) -> list[str]:
+    """條目的比對鍵，用來跨資料來源認出同一個條目。
 
-    中文釋義（Tomoshi）與英文釋義（JMdict）是兩份資料，各自有自己的編號，
-    沒辦法直接對應。但兩邊都源自 JMdict，所以**讀音組合是可靠的指紋** ——
-    「あ」有七個條目，讀音組合分別是 {おし,あ,おうし}、{われ,わ,あ,…}、
-    {あっ,あ} 等等，兩邊完全對得起來。
+    中文釋義（Tomoshi）與英文釋義（JMdict）是兩份資料、各有編號，
+    沒辦法直接對應。但兩邊都源自 JMdict，所以寫法就是指紋。
 
-    沒有這個的話，英文會挑到「唖（muteness）」而中文挑到「我（I）」，
-    兩個都掛在同一個詞上 —— 那正是 Mac 那邊回報的症狀。
+    鍵是「寫法＋讀音」的配對，**兩個都要**：
+
+    - 只用讀音會失效：射る／要る／入る／居る 的假名都只有いる，
+      於是英文挑到居る（對）而中文挑到射る（錯）掛在同一個詞上。
+    - 只用漢字也會失效：市場【いちば】與【しじょう】共用同一個漢字，
+      中文會拿到菜市場而英文是金融市場。
+
+    回傳的是清單，**任何一個配對對上就算同一個條目**。不要求整組相同 ——
+    兩邊收的異體字寫法會有出入（「ただ」JMdict 收五個漢字、Tomoshi 略有不同），
+    整組比對就對不上，而它們明明是同一個詞。
+
+    純假名的條目沒有漢字，那時讀音本身就是鍵。
     """
-    return "／".join(sorted({to_hiragana(r) for r in readings if r}))
+    kana = sorted({to_hiragana(r) for r in readings if r})
+    forms = sorted({k for k in kanji if k})
+    if not forms:
+        return kana
+    return [f"{form}|{reading}" for form in forms for reading in kana]
 
 
 def _download(url: str, target: Path) -> Path:
@@ -237,11 +254,12 @@ def _import_chinese(connection: sqlite3.Connection, cache: Path) -> int:
     tomoshi = _fetch_tomoshi(cache)
     source = sqlite3.connect(f"file:{tomoshi}?mode=ro", uri=True)
 
-    # 每個條目的假名寫法就是它的讀音（is_kana=1）
+    # 每個條目的假名寫法就是它的讀音（is_kana=1），漢字寫法拿來一起做指紋
     readings: dict[int, list[str]] = {}
-    for entry_id, text in source.execute(
-            "SELECT entry_id, text FROM forms WHERE is_kana = 1"):
-        readings.setdefault(entry_id, []).append(text)
+    kanji_of: dict[int, list[str]] = {}
+    for entry_id, text, is_kana in source.execute(
+            "SELECT entry_id, text, is_kana FROM forms"):
+        (readings if is_kana else kanji_of).setdefault(entry_id, []).append(text)
 
     # zh_defs_zhtw 是繁體。entries.data 裡另有內嵌的 lang:"zho" gloss，
     # 那個是簡體，不要用。
@@ -330,24 +348,20 @@ def _import_chinese(connection: sqlite3.Connection, cache: Path) -> int:
         form = unicodedata.normalize("NFKC", text)
         payload = json.dumps(glosses, ensure_ascii=False)
         # 讀音留空的那筆是 fallback，給沒有語境讀音時用
-        signature = reading_signature(readings.get(entry_id, ()))
-        rows.append((form, "", signature, is_common, payload))
-        for reading in readings.get(entry_id, ()):
-            rows.append((form, to_hiragana(reading), signature, is_common, payload))
+        for key in entry_keys(kanji_of.get(entry_id, ()), readings.get(entry_id, ())):
+            rows.append((form, key, is_common, payload))
     source.close()
 
     connection.executescript("""
         CREATE TABLE chinese (
             form    TEXT NOT NULL,
-            reading TEXT NOT NULL,   -- 平假名；空字串是該詞形的預設
-            sig     TEXT NOT NULL,   -- 讀音組合，跨來源認條目用（見 reading_signature）
+            key     TEXT NOT NULL,   -- 條目的一個寫法，跨來源認條目用（見 entry_keys）
             common  INTEGER NOT NULL,
             senses  TEXT NOT NULL
         );
     """)
-    connection.executemany("INSERT INTO chinese VALUES (?,?,?,?,?)", rows)
-    connection.execute("CREATE INDEX idx_chinese ON chinese(form, reading)")
-    connection.execute("CREATE INDEX idx_chinese_sig ON chinese(form, sig)")
+    connection.executemany("INSERT INTO chinese VALUES (?,?,?,?)", rows)
+    connection.execute("CREATE INDEX idx_chinese ON chinese(form, key)")
     connection.commit()
     return connection.execute(
         "SELECT COUNT(DISTINCT form) FROM chinese").fetchone()[0]
@@ -370,13 +384,19 @@ def build(db_path: Path = DEFAULT_DB, cache: Path | None = None) -> None:
         CREATE TABLE entries (
             id       INTEGER PRIMARY KEY,
             source   TEXT NOT NULL,      -- jmdict | jmnedict
-            common   INTEGER NOT NULL,   -- JMdict 的常用標記
+            common   INTEGER NOT NULL,   -- 條目層級：任一寫法常用就算
             readings TEXT NOT NULL,      -- JSON 陣列
+            kanji    TEXT NOT NULL,      -- JSON 陣列，用來比對 Sudachi 的正規化形式
             senses   TEXT NOT NULL       -- JSON 陣列
         );
         CREATE TABLE forms (
             form     TEXT NOT NULL,
-            entry_id INTEGER NOT NULL REFERENCES entries(id)
+            entry_id INTEGER NOT NULL REFERENCES entries(id),
+            -- **這個詞形本身**常不常用，跟條目層級不同。
+            -- 「結う」的漢字是常用的，但它的假名寫法「いう」不是 ——
+            -- 用條目層級判斷的話，查「いう」會把結う當成常用詞，
+            -- 跟真正常用的「言う」平起平坐。而いう是逐字稿裡第二高頻的詞。
+            common   INTEGER NOT NULL
         );
     """)
 
@@ -395,6 +415,9 @@ def build(db_path: Path = DEFAULT_DB, cache: Path | None = None) -> None:
                 common = (any(k.get("common") for k in word.get("kanji", []))
                           or any(k.get("common") for k in word.get("kana", [])))
                 senses = [{"pos": s.get("partOfSpeech", []),
+                           # misc 帶 uk（通常寫成假名）與 arch／obs（古語、廢語），
+                           # 那是分辨純假名同形詞的關鍵，見 lookup 的排序
+                           "misc": s.get("misc", []),
                            "en": [g["text"] for g in s.get("gloss", [])]}
                           for s in word.get("sense", [])]
             else:
@@ -404,14 +427,20 @@ def build(db_path: Path = DEFAULT_DB, cache: Path | None = None) -> None:
                            "en": [g["text"] for g in t.get("translation", [])]}
                           for t in word.get("translation", [])]
 
+            # 每個寫法自己的常用度，查哪個詞形就看哪個
+            per_form = {k["text"]: bool(k.get("common"))
+                        for k in list(word.get("kanji", [])) + list(word.get("kana", []))}
+
             entry_id += 1
             rows.append((entry_id, source, int(common),
                          json.dumps(kana, ensure_ascii=False),
+                         json.dumps(kanji, ensure_ascii=False),
                          json.dumps(senses, ensure_ascii=False)))
-            links += [(form, entry_id) for form in set(kanji) | set(kana)]
+            links += [(form, entry_id, int(per_form.get(form, False)))
+                      for form in set(kanji) | set(kana)]
 
-        connection.executemany("INSERT INTO entries VALUES (?,?,?,?,?)", rows)
-        connection.executemany("INSERT INTO forms VALUES (?,?)", links)
+        connection.executemany("INSERT INTO entries VALUES (?,?,?,?,?,?)", rows)
+        connection.executemany("INSERT INTO forms VALUES (?,?,?)", links)
         connection.commit()
 
     connection.execute("CREATE INDEX idx_forms ON forms(form)")
@@ -439,13 +468,15 @@ class Dictionary:
 
     def _raw(self, form: str) -> list[dict]:
         cursor = self.connection.execute(
-            "SELECT e.source, e.common, e.readings, e.senses FROM forms f "
+            "SELECT e.source, f.common, e.readings, e.kanji, e.senses FROM forms f "
             "JOIN entries e ON e.id = f.entry_id WHERE f.form = ?", (form,))
         return [{"source": source, "common": bool(common),
-                 "readings": json.loads(readings), "senses": json.loads(senses)}
-                for source, common, readings, senses in cursor]
+                 "readings": json.loads(readings), "kanji": json.loads(kanji),
+                 "senses": json.loads(senses)}
+                for source, common, readings, kanji, senses in cursor]
 
-    def lookup(self, word: str, reading: str = "", pos: str = "") -> dict | None:
+    def lookup(self, word: str, reading: str = "", pos: str = "",
+               normalized: str = "") -> dict | None:
         """查一個詞。給了語境讀音就用它挑同形異讀。
 
         reading 傳 Sudachi 的 reading_form()（片假名）。這件事很重要 ——
@@ -473,18 +504,41 @@ class Dictionary:
         # 「あ」有七個條目，其中「唖（muteness，不常用）」與
         # 「あっ（ah／oh，常用，感動詞）」的讀音都含「あ」。照資料庫順序
         # 取第一個對得上的會拿到「唖」—— 明明有個常用得多的正解在後面。
-        entries.sort(key=lambda e: (not e["common"], e["source"] != "jmdict"))
-
         chosen = None
         # 兩邊都轉平假名再比。JMdict 的外來語讀音存的是片假名
         # （トイレ、オフィス、ニュース），只把輸入轉成平假名的話永遠對不上，
         # 而外來語在 podcast 裡非常多，這個錯會讓一大票詞的讀音變成「用猜的」。
-        # 詞性對得上的排前面。Sudachi 已經判斷過這個詞在這句話裡是什麼詞性，
-        # 那是免費的第三個判斷依據 —— 「あ」讀作あ的有代名詞、感動詞、接頭辭
-        # 三個條目而且兩個都常用，只靠常用度排序等於擲骰子。
-        if pos:
-            entries.sort(key=lambda e: (not _pos_matches(e, pos),
-                                        not e["common"], e["source"] != "jmdict"))
+        # 排序的依據由強到弱。純假名的高頻詞特別需要這一整套 ——
+        # 「いう」對應言う與結う、「いる」對應居る／射る／要る／入る、
+        # 「こと」對應事與琴，讀音一樣、詞性也一樣，光靠常用度分不出來。
+        #
+        # 1. **Sudachi 的正規化形式**對得上的最優先。它把「いる」正規化成
+        #    「居る」、「すごい」正規化成「凄い」—— 那直接就是答案。
+        #    對不上時完全沒有作用，所以不會有先前擔心的
+        #    「いける 被正規化成 行く」那種副作用。
+        # 2. **不是古語**。JMdict 的 arch／obs／rare 標記。
+        #    「琴」讀作こと 是 arch、「会」讀作え 也是 arch ——
+        #    那些條目在現代日文的 podcast 裡不可能出現。
+        # 3. **詞形是假名時偏好 uk 的條目**。uk 是「這個詞通常寫成假名」，
+        #    所以逐字稿裡出現假名寫法時，uk 的條目才是說話者的意思：
+        #    事（uk）vs 琴（無）、居る（uk）vs 射る（無）、箇（uk）vs 津（無）。
+        # 4. **詞性**對得上（Sudachi 斷詞時已經判斷過）。
+        # 5. 這個**詞形本身**常不常用（不是條目層級，見 forms.common）。
+        # 6. 一般詞優先於人名。
+        #
+        # 試過用 Tomoshi 的 freq_rank 當依據，**實測反而更糟**：
+        # 琴（rank 2052）排在事（3613）前面、居る 根本不在榜上。
+        # 那份排名反映的是漢字寫法的頻率，對純假名的詞是誤導。
+        target_kanji = unicodedata.normalize("NFKC", normalized) if normalized else ""
+        kana_only = not any("一" <= c <= "鿿" for c in form)
+        entries.sort(key=lambda e: (
+            not (target_kanji and target_kanji in e.get("kanji", [])),
+            _has_misc(e, ("arch", "obs", "rare")),
+            not (kana_only and _has_misc(e, ("uk",))),
+            not (pos and _pos_matches(e, pos)),
+            not e["common"],
+            e["source"] != "jmdict",
+        ))
 
         target = to_hiragana(reading)
         if target:
@@ -506,40 +560,35 @@ class Dictionary:
 
         # 中文要認**同一個條目**，不是只認同一個讀音。
         # 中英文是兩份資料、各自有編號，但都源自 JMdict，
-        # 所以用讀音組合當指紋（見 reading_signature）。
-        chosen["zh"] = self.chinese(matched, chosen["reading"],
-                                    reading_signature(chosen["readings"]))
+        # 所以用寫法當指紋（見 entry_keys）。
+        chosen["zh"] = self.chinese(matched, entry_keys(chosen.get("kanji", []),
+                                                        chosen["readings"]))
         return chosen
 
-    def chinese(self, form: str, reading: str = "",
-                signature: str = "") -> list[str]:
+    def chinese(self, form: str, keys: list[str] | None = None) -> list[str]:
         """繁體中文釋義，一個義項一條。查不到回空陣列。
 
-        三層由嚴到寬：
+        keys 是 `entry_keys()` 給的比對鍵（條目的漢字寫法，純假名詞才用讀音）。
+        **任何一個對上就算同一個條目** —— 兩邊收的異體字寫法會有出入，
+        要求整組完全相同的話「ただ」這種詞就對不上，而它們明明是同一個詞。
 
-        1. **讀音組合**（指紋）—— 認的是同一個 JMdict 條目，最可靠。
-           少了這層會出現「英文是唖 muteness、中文是我 I」掛在同一個詞上。
-        2. **單一讀音** —— 市場【しじょう】是金融市場、【いちば】是菜市場。
-        3. **只看詞形** —— 最後的退路。
+        **對不上就不給中文，沒有退路。** 試過兩種退路，都會製造
+        「英文對、中文是別的詞」：
+
+            退回讀音比對 —— 1.7% 的詞走到這裡，其中約一半是錯的
+            只有一個條目時才退 —— 也錯。「この」在中文表裡確實只有一筆，
+                              但那筆是「九」不是「此の」。唯一不等於正確。
+
+        給學語言的人看「この = 九；數字九」比看不到中文更糟 ——
+        他沒有辦法察覺那是錯的。英文釋義仍然在，那是可信的。
         """
         form = unicodedata.normalize("NFKC", form)
-        if signature:
-            row = self.connection.execute(
-                "SELECT senses FROM chinese WHERE form = ? AND sig = ? "
-                "ORDER BY common DESC LIMIT 1", (form, signature)).fetchone()
-            if row:
-                return json.loads(row[0])
-        target = to_hiragana(reading)
-        if target:
-            # 中文表建索引時讀音已經統一轉成平假名，所以這裡只要轉輸入
-            row = self.connection.execute(
-                "SELECT senses FROM chinese WHERE form = ? AND reading = ? "
-                "ORDER BY common DESC LIMIT 1", (form, target)).fetchone()
-            if row:
-                return json.loads(row[0])
+        if not keys:
+            return []
+        placeholders = ",".join("?" * len(keys))
         row = self.connection.execute(
-            "SELECT senses FROM chinese WHERE form = ? ORDER BY common DESC LIMIT 1",
-            (form,)).fetchone()
+            f"SELECT senses FROM chinese WHERE form = ? AND key IN ({placeholders}) "
+            "ORDER BY common DESC LIMIT 1", (form, *keys)).fetchone()
         return json.loads(row[0]) if row else []
 
     def lookup_all(self, word: str) -> list[dict]:

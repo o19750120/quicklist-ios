@@ -38,6 +38,9 @@ create table if not exists public.kikitori_transcripts (
     -- 可為 null —— 舊資料沒有這個欄位，App 要當作「這集還沒有詞表」處理。
     vocab           jsonb,
     created_at      timestamptz not null default now(),
+    -- 重建時間。`created_at` 在 upsert 時不會更新，所以只看它會誤以為
+    -- 資料還是舊的 —— 重轉過的逐字稿仍顯示第一次產生的時間。
+    updated_at      timestamptz,
     unique (episode_id)
 );
 

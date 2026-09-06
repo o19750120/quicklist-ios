@@ -225,6 +225,10 @@ def main() -> int:
             "language": args.language,
             "translated_to": "zh-TW",
             "vocab": vocabulary or None,
+            # created_at 在 upsert 時不會更新，所以光看它分不出
+            # 「這份資料是什麼時候產生的」。重轉之後仍顯示舊時間，
+            # 我自己就被誤導過一次（以為重轉沒生效）。
+            "updated_at": "now()",
         }, "episode_id")
 
         mark("done", "完成")

@@ -71,6 +71,13 @@ struct NowPlayingView: View {
         .onChange(of: model.displayProgressMs) { _ in
             transcriptModel.updatePosition(model.alignedProgressMs)
             recordToLibrary()
+
+            // 逐句重聽：播到這一句的結尾就跳回句首
+            if let line = transcriptModel.lineToRepeat(at: model.alignedProgressMs) {
+                Task {
+                    await model.seek(toMs: max(0, line.startMs - model.alignmentOffsetMs))
+                }
+            }
         }
         .onChange(of: transcriptModel.transcript) { transcript in
             // 逐字稿比播放晚一步到，到了才補記句數。

@@ -11,26 +11,55 @@ import SwiftUI
 struct SideAssistant: View {
 
     @Binding var interaction: TranscriptModel.Interaction
-    /// 這一集沒有詞表就沒有查詞可切，整個控制條收起來
+    /// 這一集沒有詞表就不顯示查詞那顆，但重聽照樣可用
     let canLookUpWords: Bool
+    let repeatsCurrentLine: Bool
+    let onToggleRepeat: () -> Void
 
     @State private var showsHint = false
+    @State private var hint = ""
 
     var body: some View {
-        if canLookUpWords {
-            VStack(spacing: Theme.Space.xs) {
+        VStack(spacing: Theme.Space.xs) {
+            if canLookUpWords {
                 ForEach(TranscriptModel.Interaction.allCases) { mode in
                     button(for: mode)
                 }
+
+                Divider()
+                    .frame(width: 24)
+                    .overlay(Theme.textSecondary.opacity(0.3))
             }
-            .padding(Theme.Space.xs)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            )
-            .overlay(alignment: .leading) { hint }
-            .padding(.trailing, Theme.Space.md)
+
+            repeatButton
         }
+        .padding(Theme.Space.xs)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(alignment: .leading) { hintBubble }
+        .padding(.trailing, Theme.Space.md)
+    }
+
+    /// 播完一句要不要跳回句首重來。跟上面兩顆是不同維度的事，
+    /// 所以用分隔線隔開，而且是開關不是三選一。
+    private var repeatButton: some View {
+        Button {
+            onToggleRepeat()
+            flash(repeatsCurrentLine ? "播完整段往下走" : "這一句播完會跳回句首")
+        } label: {
+            Image(systemName: "repeat.1")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(repeatsCurrentLine ? Color.black : Theme.textSecondary)
+                .frame(width: 44, height: 44)
+                .background(
+                    Circle().fill(repeatsCurrentLine ? Theme.accent : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("逐句重聽")
+        .accessibilityIdentifier("assistant.repeat")
     }
 
     private func button(for mode: TranscriptModel.Interaction) -> some View {
@@ -39,7 +68,7 @@ struct SideAssistant: View {
         return Button {
             guard !isOn else { return }
             interaction = mode
-            flashHint()
+            flash(mode.hint)
         } label: {
             Image(systemName: mode.icon)
                 .font(.footnote.weight(.semibold))
@@ -56,9 +85,9 @@ struct SideAssistant: View {
 
     /// 切換之後短暫說明現在點下去會發生什麼 —— 模式本身看圖示猜不出來。
     @ViewBuilder
-    private var hint: some View {
+    private var hintBubble: some View {
         if showsHint {
-            Text(interaction.hint)
+            Text(hint)
                 .font(.caption)
                 .foregroundStyle(Theme.textPrimary)
                 .padding(.horizontal, Theme.Space.md)
@@ -73,7 +102,8 @@ struct SideAssistant: View {
         }
     }
 
-    private func flashHint() {
+    private func flash(_ message: String) {
+        hint = message
         withAnimation(.easeOut(duration: 0.15)) { showsHint = true }
         Task {
             try? await Task.sleep(nanoseconds: 1_600_000_000)

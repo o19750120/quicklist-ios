@@ -21,7 +21,9 @@ struct TranscriptView: View {
                     .safeAreaInset(edge: .trailing, spacing: 0) {
                         SideAssistant(
                             interaction: $transcriptModel.interaction,
-                            canLookUpWords: transcriptModel.transcript?.canLookUpWords ?? false
+                            canLookUpWords: transcriptModel.transcript?.canLookUpWords ?? false,
+                            repeatsCurrentLine: transcriptModel.repeatsCurrentLine,
+                            onToggleRepeat: { transcriptModel.toggleRepeat() }
                         )
                     }
             } else {
@@ -270,6 +272,8 @@ struct TranscriptView: View {
 
     /// 點某句就讓 Spotify 跳到那裡。需要 Premium，免費帳號會被擋。
     private func seek(to line: TranscriptLine) async {
+        // 開著逐句重聽的時候自己點了別句，就換成重聽那一句
+        transcriptModel.moveRepeat(to: line.id)
         let target = max(0, line.startMs - nowPlayingModel.alignmentOffsetMs)
         await nowPlayingModel.seek(toMs: target)
     }

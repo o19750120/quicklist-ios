@@ -533,11 +533,15 @@ class Dictionary:
         kana_only = not any("一" <= c <= "鿿" for c in form)
         entries.sort(key=lambda e: (
             not (target_kanji and target_kanji in e.get("kanji", [])),
+            # 人名要排在一般詞後面，而且要排在「古語」判斷**之前**。
+            # 「あと」的 JMdict「後」帶 arch 標記，而 JMnedict 有個姓氏
+            # 也寫作「後」—— 先扣古語的分就會讓姓氏贏，於是普通的「あと」
+            # 被解成人名 Ato。一般詞就算標成古語也比姓氏合理。
+            e["source"] != "jmdict",
             _has_misc(e, ("arch", "obs", "rare")),
             not (kana_only and _has_misc(e, ("uk",))),
             not (pos and _pos_matches(e, pos)),
             not e["common"],
-            e["source"] != "jmdict",
         ))
 
         target = to_hiragana(reading)

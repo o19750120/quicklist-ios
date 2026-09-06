@@ -392,6 +392,13 @@ def _entry(dictionary: Dictionary, entry: dict, token) -> dict:
     # 我們退回用常用度猜的 —— App 要顯示假名時這個旗標決定敢不敢標。
     if not entry.get("matched_reading"):
         row["guess"] = True
+
+    # 人名地名要標出來。Tomoshi 只涵蓋 JMdict，從來沒有 JMnedict，
+    # 所以人名沒有中文釋義是**本來就這樣**，不是資料缺漏。
+    # 實測四集裡沒有中文的 51 個詞有 47 個是人名（野村、ジョブズ）——
+    # 對那些顯示「中文釋義缺漏」會誤導，使用者本來就不需要人名的中文釋義。
+    if entry.get("source") == "jmnedict":
+        row["name"] = True
     return row
 
 

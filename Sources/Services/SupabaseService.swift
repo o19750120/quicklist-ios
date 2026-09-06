@@ -57,7 +57,8 @@ struct SupabaseService {
 
     /// 用 Spotify 的 episode id 查逐字稿。沒有就回 nil（代表還沒轉錄過）。
     func fetchTranscript(spotifyEpisodeID: String) async throws -> Transcript? {
-        let select = "id,show_name,episode_title,language,duration_ms,kikitori_transcripts(lines,language)"
+        let select = "id,show_name,episode_title,language,duration_ms,"
+            + "kikitori_transcripts(lines,language,vocab)"
         let path = "kikitori_episodes?spotify_episode_id=eq.\(spotifyEpisodeID)&select=\(select)&limit=1"
         guard let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
             return nil
@@ -90,11 +91,15 @@ struct SupabaseService {
                 startMs: item["start_ms"] as? Int ?? 0,
                 endMs: item["end_ms"] as? Int ?? 0,
                 text: text,
-                translation: (item["translation"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                translation: (item["translation"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                speaker: item["speaker"] as? Int
             )
         }
 
         guard !lines.isEmpty else { return nil }
+
+        // 舊資料沒有 vocab，解析失敗就是沒有查詞功能，不影響其他部分
+        let vocabulary = Vocabulary(json: transcript["vocab"])
 
         return Transcript(
             episodeUUID: row["id"] as? String ?? "",
@@ -102,7 +107,8 @@ struct SupabaseService {
             episodeTitle: row["episode_title"] as? String ?? "",
             language: (transcript["language"] as? String) ?? (row["language"] as? String) ?? "ja",
             sourceDurationMs: row["duration_ms"] as? Int ?? 0,
-            lines: lines
+            lines: lines,
+            vocabulary: vocabulary
         )
     }
 

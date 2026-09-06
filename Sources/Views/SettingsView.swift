@@ -49,6 +49,32 @@ struct SettingsView: View {
                 Section("關於") {
                     LabeledContent("版本", value: appVersion)
                 }
+
+                // CC BY-SA 4.0 要求標示出處，這是授權義務不是禮貌。
+                // ShareAlike 只及於字典「資料」，不及於這個 App 的程式碼。
+                Section {
+                    VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                        Text("JMdict / JMnedict / KANJIDIC")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text("© Electronic Dictionary Research and Development Group\nCC BY-SA 4.0")
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary)
+
+                        Text("繁體中文釋義")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(Theme.textPrimary)
+                            .padding(.top, Theme.Space.xs)
+                        Text("© Y1Z (Tomoshi)\nCC BY-SA 4.0")
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    .padding(.vertical, Theme.Space.xs)
+                } header: {
+                    Text("字典來源")
+                } footer: {
+                    Text("點單字查到的解釋來自這些開放資料集，全部存在逐字稿裡，查詞不會連網。")
+                }
             }
             .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.inline)

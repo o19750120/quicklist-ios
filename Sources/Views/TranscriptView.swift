@@ -6,6 +6,8 @@ struct TranscriptView: View {
     @ObservedObject var nowPlayingModel: NowPlayingModel
     let episode: NowPlaying
 
+    /// 點開的那個詞。日文沒有空格，能點是因為後端把詞邊界一起算好了。
+    @State private var lookup: WordLookup?
     /// 使用者手動捲動時暫停自動跟隨，免得跟他搶
     @State private var isUserScrolling = false
     @State private var autoFollowResumeTask: Task<Void, Never>?
@@ -38,6 +40,15 @@ struct TranscriptView: View {
             .simultaneousGesture(
                 DragGesture().onChanged { _ in pauseAutoFollow() }
             )
+            .sheet(item: $lookup) { item in
+                WordDetailView(
+                    word: item.word,
+                    reading: item.reading,
+                    isAmbiguous: item.isAmbiguous,
+                    entry: transcriptModel.transcript?.vocabulary?.entry(for: item.lemma)
+                )
+                .presentationDetents([.medium, .large])
+            }
             .onChange(of: transcriptModel.currentLineIndex) { index in
                 guard let index, !isUserScrolling else { return }
                 withAnimation(.easeInOut(duration: 0.35)) {
@@ -50,10 +61,17 @@ struct TranscriptView: View {
     private func lineRow(_ line: TranscriptLine) -> some View {
         let isCurrent = line.id == transcriptModel.currentLineIndex
 
+        let spans = transcriptModel.transcript?.vocabulary?.spans(forLine: line.id) ?? []
+
         return VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            Text(line.text)
-                .font(isCurrent ? .title3.weight(.semibold) : .body)
-                .foregroundStyle(isCurrent ? Theme.textPrimary : Theme.textSecondary)
+            if spans.isEmpty {
+                // 舊資料沒有詞表，就是一整句不能點
+                Text(line.text)
+                    .font(isCurrent ? .title3.weight(.semibold) : .body)
+                    .foregroundStyle(isCurrent ? Theme.textPrimary : Theme.textSecondary)
+            } else {
+                wordFlow(line, spans: spans, isCurrent: isCurrent)
+            }
 
             if transcriptModel.showTranslation, let translation = line.translation {
                 Text(translation)
@@ -64,6 +82,7 @@ struct TranscriptView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, Theme.Space.md)
         .padding(.horizontal, Theme.Space.lg)
+        .overlay(alignment: .leading) { speakerMark(for: line) }
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                 .fill(isCurrent ? Theme.surface : .clear)
@@ -116,6 +135,115 @@ struct TranscriptView: View {
             .frame(maxWidth: 340, alignment: .leading)
             .background(Theme.surface)
         }
+    }
+
+    // MARK: - 可以點的詞
+
+    /// 一句話拆成一個個詞排出來。
+    ///
+    /// 點到詞就查字典，點到助詞、標點或空白處還是跳轉 ——
+    /// 兩種操作落在不同的地方，不必另外開一個模式切換。
+    private func wordFlow(_ line: TranscriptLine,
+                          spans: [Vocabulary.Span],
+                          isCurrent: Bool) -> some View {
+        let characters = Array(line.text)
+        let pieces = merged(spans, in: characters)
+
+        return WordFlowLayout(lineSpacing: isCurrent ? 8 : 6) {
+            ForEach(Array(pieces.enumerated()), id: \.offset) { index, item in
+                let span = item.span
+                let piece = item.text
+                Text(piece)
+                    .font(isCurrent ? .title3.weight(.semibold) : .body)
+                    .foregroundStyle(isCurrent ? Theme.textPrimary : Theme.textSecondary)
+                    // 後端判定這裡有兩種讀法時給個很輕的提示，
+                    // 不是每個「字典裡有別的讀音」的詞都標 —— 那會有三分之一的詞中標。
+                    .overlay(alignment: .bottom) {
+                        if span.isAmbiguous {
+                            Rectangle()
+                                .fill(Theme.accent.opacity(0.5))
+                                .frame(height: 1)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    // 只有查得到的詞掛識別名，UI 測試才點得準，
+                    // 也才不會誤點到助詞或上方資訊列的節目名
+                    .accessibilityIdentifier(
+                        span.lemma == nil ? "transcript.token" : "transcript.word.\(line.id).\(index)"
+                    )
+                    .onTapGesture {
+                        guard let lemma = span.lemma else { return }
+                        lookup = WordLookup(
+                            word: piece,
+                            lemma: lemma,
+                            reading: transcriptModel.transcript?.vocabulary?.reading(for: span),
+                            isAmbiguous: span.isAmbiguous
+                        )
+                    }
+            }
+        }
+    }
+
+    /// 日文的禁則：句號、逗號、收尾括號不能出現在行首。
+    /// 後端把標點切成獨立的一段，照那樣排就會看到「。」自己掉到下一行。
+    private static let cannotStartLine: Set<Character> = [
+        "。", "、", "，", "．", "」", "』", "）", "〉", "》", "！", "？", "…", "ー", "・",
+        ".", ",", ")", "]", "}", "!", "?",
+    ]
+
+    /// 把不能放在行首的標點併進前一段，換行才不會把它孤零零留在下一行的開頭。
+    private func merged(_ spans: [Vocabulary.Span],
+                        in characters: [Character]) -> [(span: Vocabulary.Span, text: String)] {
+        var result: [(span: Vocabulary.Span, text: String)] = []
+
+        for span in spans {
+            let piece = text(of: span, in: characters)
+            guard !piece.isEmpty else { continue }
+
+            let isTrailingPunctuation = span.lemma == nil
+                && piece.allSatisfy { Self.cannotStartLine.contains($0) }
+
+            if isTrailingPunctuation, let last = result.last {
+                // 併進前一段，可點的範圍還是原本那個詞
+                result[result.count - 1] = (last.span, last.text + piece)
+            } else {
+                result.append((span, piece))
+            }
+        }
+        return result
+    }
+
+    private func text(of span: Vocabulary.Span, in characters: [Character]) -> String {
+        guard span.start >= 0, span.end <= characters.count, span.start < span.end else {
+            return ""
+        }
+        return String(characters[span.start..<span.end])
+    }
+
+    // MARK: - 說話者
+
+    /// 換人講話時在句子左緣畫一條細線。
+    ///
+    /// 刻意不用背景色也不放頭像：這幾集實測平均每三句就換一次人，
+    /// 背景色會讓畫面一直閃、還會跟「目前這句」的高亮打架，
+    /// 而那是這個 App 最重要的視覺訊號。diarization 本身也會出錯，
+    /// 細線的份量剛好對應它的可信度。
+    @ViewBuilder
+    private func speakerMark(for line: TranscriptLine) -> some View {
+        if let transcript = transcriptModel.transcript,
+           transcript.startsNewSpeaker(at: line.id),
+           let speaker = line.speaker {
+            Capsule()
+                .fill(speakerColor(speaker))
+                .frame(width: 3)
+                .padding(.vertical, Theme.Space.sm)
+        }
+    }
+
+    /// 說話者的顏色只從中性色階取，不用彩色 —— 橘色是「目前這句」的專用訊號。
+    private func speakerColor(_ speaker: Int) -> Color {
+        let shades: [Color] = [Theme.textSecondary, Theme.surfaceRaised, Theme.textPrimary]
+        return shades[abs(speaker) % shades.count]
     }
 
     /// 點某句就讓 Spotify 跳到那裡。需要 Premium，免費帳號會被擋。

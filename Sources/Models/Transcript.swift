@@ -7,6 +7,8 @@ struct TranscriptLine: Identifiable, Equatable {
     let endMs: Int
     let text: String
     let translation: String?
+    /// 後端 diarization 給的說話者編號。獨白節目只會有一種值。
+    let speaker: Int?
 
     func contains(_ positionMs: Int) -> Bool {
         positionMs >= startMs && positionMs < endMs
@@ -22,8 +24,30 @@ struct Transcript: Equatable {
     /// 兩者相減就是時間軸偏移的合理猜測。
     let sourceDurationMs: Int
     let lines: [TranscriptLine]
+    /// 該集的詞表與詞邊界。舊資料沒有，那就沒有查詞功能。
+    let vocabulary: Vocabulary?
 
     var isEmpty: Bool { lines.isEmpty }
+
+    var canLookUpWords: Bool { vocabulary != nil }
+
+    /// 這一集有幾個人在講話。
+    ///
+    /// 只有一位時不該顯示任何說話者標示 —— 為不存在的區別加 UI 是純雜訊，
+    /// 而獨白節目佔多數。
+    var speakerCount: Int {
+        Set(lines.compactMap(\.speaker)).count
+    }
+
+    var hasMultipleSpeakers: Bool { speakerCount > 1 }
+
+    /// 這一句是不是換人講了。連續同一人只在第一句標，跟聊天介面併訊息同個道理。
+    func startsNewSpeaker(at index: Int) -> Bool {
+        guard hasMultipleSpeakers, index >= 0, index < lines.count else { return false }
+        guard let speaker = lines[index].speaker else { return false }
+        guard index > 0 else { return true }
+        return lines[index - 1].speaker != speaker
+    }
 
     /// 找出某個播放位置對應到哪一句。
     ///

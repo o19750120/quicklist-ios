@@ -8,6 +8,7 @@
   5. Swift 檔的括號 / 引號是否平衡（粗略，真正的編譯錯誤只有 CI 抓得到）
 """
 import json
+import re
 import plistlib
 import sys
 from pathlib import Path
@@ -104,6 +105,9 @@ def check_swift():
         stripped = "\n".join(
             line for line in text.splitlines() if not line.lstrip().startswith("//")
         )
+        # 字串裡的括號不算 —— 程式碼本來就會出現 ")" 這種字面值
+        # （禁則處理的標點表就是一例），照字面計數會誤報成括號不對稱。
+        stripped = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', stripped)
         for opener, closer in [("{", "}"), ("(", ")"), ("[", "]")]:
             if stripped.count(opener) != stripped.count(closer):
                 errors.append(

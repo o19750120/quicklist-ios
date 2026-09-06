@@ -23,6 +23,11 @@ struct Vocabulary: Equatable {
         let alternateReadings: [String]
         /// 讀音是推測的，標假名時要保守一點
         let readingIsGuess: Bool
+        /// 這是人名或地名（來自 JMnedict）。
+        ///
+        /// 中文釋義的來源只涵蓋 JMdict、從來沒有 JMnedict，
+        /// 所以人名沒有中文是本來就這樣，不是資料缺漏 —— 不要對它說「缺漏」。
+        let isName: Bool
 
         var hasChinese: Bool { !chinese.isEmpty }
     }
@@ -81,7 +86,8 @@ struct Vocabulary: Equatable {
                 chinese: item["zh"] as? [String] ?? [],
                 english: item["en"] as? [String] ?? [],
                 alternateReadings: item["alt"] as? [String] ?? [],
-                readingIsGuess: item["guess"] as? Bool ?? false
+                readingIsGuess: item["guess"] as? Bool ?? false,
+                isName: item["name"] as? Bool ?? false
             )
         }
 

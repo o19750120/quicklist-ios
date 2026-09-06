@@ -28,7 +28,9 @@ struct WordDetailView: View {
                     if let entry, !entry.english.isEmpty {
                         senses("English", entry.english, tint: Theme.textSecondary)
                     }
-                    if let entry, !entry.hasChinese, !entry.english.isEmpty {
+                    // 人名沒有中文是本來就這樣，不是缺漏 —— 對「ジョブズ」說
+                    // 「中文釋義缺漏」會讓人以為字典壞了，他也本來就不需要人名的中文。
+                    if let entry, !entry.hasChinese, !entry.english.isEmpty, !entry.isName {
                         chineseMissing
                     }
                     if entry == nil {
@@ -64,7 +66,14 @@ struct WordDetailView: View {
                         .font(.headline)
                         .foregroundStyle(Theme.accent)
                 }
-                if let entry, !entry.partOfSpeech.isEmpty {
+                if let entry, entry.isName {
+                    Text("人名・地名")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textSecondary)
+                        .padding(.horizontal, Theme.Space.sm)
+                        .padding(.vertical, 2)
+                        .background(Theme.surface, in: Capsule())
+                } else if let entry, !entry.partOfSpeech.isEmpty {
                     Text(entry.partOfSpeech)
                         .font(.caption)
                         .foregroundStyle(Theme.textSecondary)
